@@ -188,6 +188,18 @@
           <input type="checkbox" role="switch" id="set-sounds" checked />
         </label>
 
+        <div class="field">
+          <span>Atualizações</span>
+          <div class="update-row">
+            <div>
+              <strong id="set-update-version">Ponte</strong>
+              <small id="set-update-text"></small>
+            </div>
+            <button type="button" class="pill-btn" id="set-update-btn">Procurar</button>
+          </div>
+          <small>Fechar a janela deixa a Ponte rodando no ícone perto do relógio. Para sair de vez, use o menu desse ícone.</small>
+        </div>
+
         <details class="field">
           <summary>Diagnóstico da rede</summary>
           <pre id="set-log"></pre>
@@ -250,6 +262,7 @@
 
   <div class="toast glass" id="toast" role="status" hidden></div>
   <script src="glass.js"></script>
+  <script src="demo.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

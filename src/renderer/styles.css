@@ -322,6 +322,11 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); overflow: hidden; overscroll-b
 .field select option { background: #2c2c2e; }
 .row-input { display: flex; gap: 8px; }
 .row-input input { flex: 1; background: rgba(118, 118, 128, .24); border: 0; border-radius: 12px; padding: 11px 14px; outline: none; font-size: 16px; }
+.update-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: rgba(118, 118, 128, .16); border-radius: 14px; padding: 10px 12px 10px 16px; }
+.update-row > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.update-row strong { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.update-row small { padding-left: 0 !important; color: var(--label-2) !important; font-variant-numeric: tabular-nums; }
+.update-row .pill-btn { flex: none; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .ip-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .ip-list li { display: flex; align-items: center; justify-content: space-between; background: rgba(118, 118, 128, .16); border-radius: 12px; padding: 10px 14px; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; user-select: text; }

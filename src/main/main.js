@@ -6,6 +6,8 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const { spawn, execFile } = require('node:child_process');
 const { LanNode, localInterfaces } = require('./lan');
+const updater = require('./updater');
+const { createTray } = require('./tray');
 
 // Sem isso o Chromium esconde os IPs locais atrás de nomes .local (mDNS),
 // o que costuma falhar dentro do Radmin VPN.
@@ -31,6 +33,9 @@ let node = null;
 let config = null;
 let history = [];
 let pendingScreen = null; // { id, audio }
+let tray = null;
+let quitting = false; // true quando o usuário manda fechar de vez (não só esconder)
+const voiceState = { voice: false, muted: false, deafened: false, sharing: false };
 
 const userFile = (name) => path.join(app.getPath('userData'), name);
 
@@ -117,6 +122,8 @@ function me() {
     manualHosts: config.manualHosts,
     autotest: AUTOTEST,
     platform: process.platform,
+    version: app.getVersion(),
+    update: updater.status(),
   };
 }
 
@@ -131,7 +138,10 @@ async function startNetwork() {
     console.log(`[rede] ${line}`);
     send('log', line);
   });
-  node.on('peers', () => send('peers', node.listPeers()));
+  node.on('peers', () => {
+    send('peers', node.listPeers());
+    if (tray) tray.refresh();
+  });
   node.on('connected', (peerId) => {
     // Sincroniza o histórico com quem acabou de chegar.
     node.sendTo(peerId, { t: 'history', msgs: history.slice(-100) });
@@ -143,9 +153,7 @@ async function startNetwork() {
         send('chat', m);
         if (win && !win.isFocused()) {
           win.flashFrame(true);
-          if (Notification.isSupported()) {
-            new Notification({ title: m.name, body: m.text.slice(0, 120), silent: false }).show();
-          }
+          notify(m.name, m.text.slice(0, 120), showWindow);
         }
       }
     } else if (msg.t === 'history' && Array.isArray(msg.msgs)) {
@@ -171,6 +179,8 @@ function createWindow() {
     title: AUTOTEST ? `Ponte — ${config.name}` : 'Ponte',
     autoHideMenuBar: true,
     icon: path.join(__dirname, '..', 'renderer', 'icon.png'),
+    // Capturas do README: sempre 1280x800, mesmo em telas menores (macOS).
+    enableLargerThanScreen: !!process.env.PONTE_SHOT,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -180,7 +190,20 @@ function createWindow() {
     },
   });
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  if (process.env.PONTE_SHOT) win.setContentSize(1280, 800);
   win.on('focus', () => win.flashFrame(false));
+  // Fechar só esconde: a Ponte continua na bandeja (voz, chat e transmissão seguem).
+  win.on('close', (e) => {
+    if (quitting || !tray) return;
+    e.preventDefault();
+    if (win.isFullScreen()) win.setFullScreen(false);
+    win.hide();
+    if (!config.trayHintShown) {
+      config.trayHintShown = true;
+      saveConfig();
+      notify('A Ponte continua aberta', 'Ela fica no ícone perto do relógio. Clique com o botão direito nele para silenciar, atualizar ou fechar de vez.', showWindow);
+    }
+  });
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//.test(url)) shell.openExternal(url);
     return { action: 'deny' };
@@ -257,7 +280,13 @@ function setupIpc() {
     for (const k of ['voice', 'muted', 'deafened', 'sharing']) if (k in patch) allowed[k] = !!patch[k];
     if ('quality' in patch) allowed.quality = String(patch.quality || '').replace(/[^0-9p]/g, '').slice(0, 8);
     node.setState(allowed);
+    for (const k of Object.keys(voiceState)) if (k in allowed) voiceState[k] = allowed[k];
+    if (tray) tray.refresh();
   });
+
+  ipcMain.handle('update:status', () => updater.status());
+  ipcMain.on('update:check', () => { manualCheck = true; updater.check(); });
+  ipcMain.on('update:install', () => updater.install());
 
   ipcMain.handle('name:set', (_e, name) => {
     name = String(name || '').trim().slice(0, 40);
@@ -302,10 +331,87 @@ function setupIpc() {
   });
 
   ipcMain.on('log', (_e, line) => console.log(`[ui ${config.name}] ${line}`));
-  ipcMain.on('focus', () => { if (win) { win.show(); win.focus(); } });
+  ipcMain.on('focus', showWindow);
+}
+
+// ------------------------------------------------------------------ janela, bandeja e atualização
+function notify(title, body, onClick) {
+  if (!Notification.isSupported()) return;
+  const n = new Notification({ title, body, silent: false, icon: path.join(__dirname, '..', 'renderer', 'icon.png') });
+  if (onClick) n.on('click', onClick);
+  n.show();
+}
+
+function showWindow() {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+
+function toggleWindow() {
+  if (!win || win.isDestroyed()) return;
+  if (win.isVisible() && !win.isMinimized() && win.isFocused()) win.hide();
+  else showWindow();
+}
+
+function quitApp() {
+  quitting = true;
+  app.quit();
+}
+
+let manualCheck = false;
+let readyNotified = false;
+function onUpdateStatus(s) {
+  send('update:status', s);
+  if (tray) tray.refresh();
+  if (s.state === 'ready' && !readyNotified) {
+    readyNotified = true;
+    manualCheck = false;
+    notify(`Ponte ${s.next} pronta para instalar`, 'Clique aqui para reiniciar e atualizar agora, ou ela se instala quando você fechar a Ponte.', () => updater.install());
+  } else if (manualCheck && s.state === 'latest') {
+    manualCheck = false;
+    notify('A Ponte está atualizada', `Você já está na versão mais recente (${s.version}).`);
+  } else if (manualCheck && s.state === 'error') {
+    manualCheck = false;
+    notify('Não deu para procurar atualizações', 'Confira a conexão com a internet e tente de novo.');
+  }
+}
+
+function setupTray() {
+  if (AUTOTEST) return; // no autoteste, fechar a janela continua encerrando o app
+  try {
+    tray = createTray({
+      getState: () => ({
+        ...voiceState,
+        peers: node ? node.listPeers().length : 0,
+        update: updater.status(),
+        version: app.getVersion(),
+      }),
+      actions: {
+        show: showWindow,
+        toggleWindow,
+        command: (name) => {
+          send('tray:cmd', name);
+          if (name === 'settings' || (name === 'join' && !voiceState.voice)) showWindow();
+        },
+        checkUpdate: () => { manualCheck = true; updater.check(); },
+        installUpdate: () => updater.install(),
+        quit: quitApp,
+      },
+    });
+  } catch (err) {
+    console.error('Falha ao criar o ícone da bandeja:', err.message);
+    tray = null;
+  }
 }
 
 app.whenReady().then(async () => {
+  updater.init();
+  updater.onStatus(onUpdateStatus);
+  // Como o Discord: procura atualização antes de abrir. Se achar, instala e reabre sozinha.
+  await updater.startup();
+
   config = loadConfig();
   history = readJson(userFile('history.json'), []);
   if (!Array.isArray(history)) history = [];
@@ -318,11 +424,13 @@ app.whenReady().then(async () => {
     console.error('Falha ao iniciar a rede:', err);
   }
   createWindow();
+  updater.closeSplash();
+  setupTray();
 });
 
-app.on('second-instance', () => {
-  if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
-});
+app.on('second-instance', showWindow);
+app.on('activate', showWindow); // macOS: clicar no ícone do Dock reabre a janela
+app.on('before-quit', () => { quitting = true; });
 
 // ------------------------------------------------------------------ som por aplicativo
 // O Electron só captura o som do sistema inteiro. Para mandar só o som do
@@ -394,8 +502,15 @@ function setupAppAudio() {
   ipcMain.on('audio:stop', stopAppAudio);
 }
 
+// Com a bandeja, a janela só some de verdade quando o app está fechando.
 app.on('window-all-closed', () => {
+  if (!quitting && tray) return;
+  app.quit();
+});
+
+app.on('will-quit', () => {
   stopAppAudio();
   if (node) node.stop();
-  app.quit();
+  updater.stop();
+  if (tray) { tray.destroy(); tray = null; }
 });

@@ -465,7 +465,9 @@ async function openScreenPicker() {
   $('#sources').innerHTML = '<p class="waiting">Carregando…</p>';
   $('#dlg-screen').showModal();
   try {
-    [sourceList, audioApps] = await Promise.all([api.screenSources(), api.audioApps().catch(() => null)]);
+    [sourceList, audioApps] = me.demo
+      ? [demoSources(), demoAudioApps()]
+      : await Promise.all([api.screenSources(), api.audioApps().catch(() => null)]);
   } catch (err) {
     $('#sources').textContent = `Falha ao listar telas: ${err.message}`;
     return;
@@ -603,7 +605,9 @@ async function startScreen(sourceId, quality, audioChoice) {
     frameRate: { ideal: quality.fps, max: quality.fps },
   };
   try {
-    screenStream = me.autotestCanvas
+    screenStream = me.demo
+      ? demoScene(quality)
+      : me.autotestCanvas
       ? testPattern(quality)
       : await navigator.mediaDevices.getDisplayMedia({ video: size, audio: false });
   } catch (err) {
@@ -836,7 +840,7 @@ function render() {
     info.className = 'member-info';
     info.innerHTML = '<strong></strong><small></small>';
     info.querySelector('strong').textContent = p.name;
-    info.querySelector('small').textContent = p.id === me.id ? 'você' : (me.demo ? '26.31.200.45' : p.address);
+    info.querySelector('small').textContent = p.id === me.id ? 'você' : (me.demo ? `26.${31 + p.name.length * 7}.${p.name.charCodeAt(0)}.${45 + p.name.length}` : p.address);
     li.append(info);
     const flags = document.createElement('div');
     flags.className = 'member-flags';
@@ -954,8 +958,49 @@ function toggleFullscreen(el) {
   else el.requestFullscreen().catch((err) => toast(`Não deu para abrir em tela cheia: ${err.message}`));
 }
 
+// ------------------------------------------------------------------ atualizações
+let update = { state: 'idle', version: '', next: '', percent: 0, error: '' };
+
+const UPDATE_TEXT = {
+  disabled: 'Atualização automática só no app instalado.',
+  idle: 'Procura sozinha ao abrir e a cada 30 minutos.',
+  checking: 'Procurando atualizações…',
+  latest: 'Você está na versão mais recente.',
+  error: 'Não deu para procurar agora. Confira a internet.',
+};
+
+function renderUpdate() {
+  const btn = $('#set-update-btn');
+  if (!btn) return;
+  $('#set-update-version').textContent = `Ponte ${update.version || me.version || ''}`.trim();
+  let text = UPDATE_TEXT[update.state] || UPDATE_TEXT.idle;
+  if (update.state === 'downloading') text = `Baixando a versão ${update.next}… ${update.percent}%`;
+  if (update.state === 'ready') text = `Versão ${update.next} baixada. Instala ao reiniciar.`;
+  $('#set-update-text').textContent = text;
+  btn.textContent = update.state === 'ready' ? 'Reiniciar e atualizar' : 'Procurar';
+  btn.classList.toggle('primary', update.state === 'ready');
+  btn.disabled = ['disabled', 'checking', 'downloading'].includes(update.state);
+}
+
+function onUpdate(s) {
+  const wasReady = update.state === 'ready';
+  update = s;
+  renderUpdate();
+  if (s.state === 'ready' && !wasReady) toast(`A versão ${s.next} foi baixada. Ela se instala quando você reiniciar a Ponte (Ajustes ou ícone perto do relógio).`, 7000);
+}
+
+function onTrayCmd(cmd) {
+  if (cmd === 'mute') toggleMute();
+  else if (cmd === 'deafen') toggleDeafen();
+  else if (cmd === 'join') { if (!local.voice) joinVoice(); }
+  else if (cmd === 'leave') { if (local.voice) leaveVoice(); }
+  else if (cmd === 'stop-share') { if (local.sharing) stopScreen(); }
+  else if (cmd === 'settings') { if (!$('#dlg-settings').open) openSettings(); }
+}
+
 // ------------------------------------------------------------------ configurações
 async function openSettings() {
+  renderUpdate();
   $('#set-name').value = me.name;
   $('#set-sounds').checked = prefs.read('sounds', true);
   $('#set-glass').checked = prefs.read('glass', true);
@@ -1073,6 +1118,10 @@ function bind() {
   $('#me-name-btn').onclick = openSettings;
   $('#btn-add-ip').onclick = async () => { await openSettings(); $('#set-host').focus(); };
   $('#set-host-add').onclick = addHost;
+  $('#set-update-btn').onclick = () => {
+    if (update.state === 'ready') api.installUpdate();
+    else { update = { ...update, state: 'checking' }; renderUpdate(); api.checkUpdate(); }
+  };
   $('#set-host').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); addHost(); } };
   $('#dlg-settings').addEventListener('close', () => {
     const dlg = $('#dlg-settings');
@@ -1121,6 +1170,8 @@ function bind() {
   api.onChat((m) => appendMessage(m));
   api.onSignal(onSignal);
   api.onLog((line) => log(line));
+  api.onTrayCmd(onTrayCmd);
+  api.onUpdate(onUpdate);
 }
 
 // ------------------------------------------------------------------ teste automático
@@ -1148,8 +1199,18 @@ function testPattern(q) {
 
 function autotest() {
   log('autoteste: ativo');
-  if (me.autotestDialog === 'settings') setTimeout(openSettings, 3000);
-  if (me.autotestDialog === 'screen') setTimeout(async () => { await openScreenPicker(); document.querySelector('#dlg-screen .tab[data-kind=window]').click(); document.querySelector('#sources .source')?.click(); }, 3000);
+  if (me.autotestDialog === 'settings') {
+    setTimeout(async () => { await openSettings(); if (me.demo) document.activeElement?.blur(); }, 3000);
+  }
+  if (me.autotestDialog === 'screen') {
+    setTimeout(async () => {
+      await openScreenPicker();
+      if (me.demo) { $('#screen-fps').value = '60'; updateQualityHint(); }
+      document.querySelector('#dlg-screen .tab[data-kind=window]').click();
+      document.querySelector('#sources .source')?.click();
+      if (me.demo) document.activeElement?.blur();
+    }, 3000);
+  }
   setTimeout(async () => {
     await joinVoice();
     if (me.autotestView === 'chat') setView('chat');
@@ -1219,6 +1280,7 @@ function autotest() {
   bind();
   const init = await api.init();
   me = init.me;
+  if (me.update) update = me.update;
   me.autotestShare = me.autotestShare || /compartilha/i.test(me.name);
   peers = init.peers;
   renderHistory(init.history);

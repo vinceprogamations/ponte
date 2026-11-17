@@ -1,0 +1,21 @@
+@font-face { font-family: "Inter"; font-weight: 100 900; src: url("../../src/renderer/fonts/Inter-latin.woff2") format("woff2"); }
+@font-face { font-family: "Inter"; font-weight: 100 900; src: url("../../src/renderer/fonts/Inter-latin-ext.woff2") format("woff2"); unicode-range: U+0100-024F, U+1E00-1EFF; }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: transparent; }
+body { font-family: "Inter", system-ui, sans-serif; color: #fff; -webkit-font-smoothing: antialiased; overflow: hidden; }
+
+/* Janela do Windows 11 com a Ponte dentro */
+.win { position: relative; border-radius: 12px; overflow: hidden; background: #000;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.14), 0 30px 60px -12px rgba(0,0,0,.55), 0 18px 36px -18px rgba(0,0,0,.5); }
+.win > img { display: block; width: 100%; height: auto; }
+.win .caption { position: absolute; top: 0; right: 0; height: 3.125%; min-height: 0; display: flex; background: #000; }
+.win .caption span { width: 46px; display: grid; place-items: center; }
+.win .caption svg { width: 10px; height: 10px; stroke: #fff; stroke-width: 1; fill: none; }
+
+/* Cartão de fundo com o brilho da Ponte */
+.stage { position: relative; border-radius: 28px; overflow: hidden;
+  background:
+    radial-gradient(60% 70% at 12% 0%, rgba(41, 98, 255, .55), transparent 70%),
+    radial-gradient(50% 60% at 95% 10%, rgba(140, 60, 220, .45), transparent 70%),
+    radial-gradient(60% 60% at 75% 110%, rgba(255, 120, 40, .45), transparent 70%),
+    #05060a; }

@@ -27,4 +27,9 @@ contextBridge.exposeInMainWorld('ponte', {
   onChat: on('chat'),
   onSignal: on('signal'),
   onLog: on('log'),
+  onTrayCmd: on('tray:cmd'),
+  updateStatus: () => ipcRenderer.invoke('update:status'),
+  checkUpdate: () => ipcRenderer.send('update:check'),
+  installUpdate: () => ipcRenderer.send('update:install'),
+  onUpdate: on('update:status'),
 });

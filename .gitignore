@@ -3,3 +3,4 @@ dist/
 perfil-*/
 *.log
 native/bin/
+docs/img/raw/

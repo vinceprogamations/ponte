@@ -23,6 +23,17 @@ jobs:
       - name: Instalar dependências
         run: npm ci
 
+      - name: Conferir versão
+        shell: bash
+        run: |
+          # O atualizador compara a versão do package.json com a tag da release.
+          WANT="${GITHUB_REF_NAME#v}"
+          HAVE="$(node -p "require('./package.json').version")"
+          if [ "$WANT" != "$HAVE" ]; then
+            echo "::error::A tag é v$WANT mas o package.json está em $HAVE. Ajuste o package.json antes de criar a tag."
+            exit 1
+          fi
+
       - name: Gerar instalador
         run: npm run dist
 
@@ -32,10 +43,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${GITHUB_REF_NAME}"
+          # latest.yml e o .blockmap são o que a Ponte instalada lê para se atualizar sozinha.
+          FILES=(dist/Ponte-Instalar.exe dist/Ponte-Instalar.exe.blockmap dist/latest.yml)
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/Ponte-Instalar.exe --clobber
+            gh release upload "$TAG" "${FILES[@]}" --clobber
           else
-            gh release create "$TAG" dist/Ponte-Instalar.exe \
+            gh release create "$TAG" "${FILES[@]}" \
               --title "Ponte $TAG" \
               --notes-file .github/release-notes.md
           fi
