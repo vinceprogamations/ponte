@@ -105,6 +105,9 @@ function me() {
       : localInterfaces(),
     demo: DEMO,
     autotestView: process.env.PONTE_AUTOTEST_VIEW || '',
+    autotestRes: Number(process.env.PONTE_AUTOTEST_RES) || 0,
+    autotestFps: Number(process.env.PONTE_AUTOTEST_FPS) || 0,
+    autotestCanvas: AUTOTEST && process.env.PONTE_AUTOTEST_CANVAS === '1',
     manualHosts: config.manualHosts,
     autotest: AUTOTEST,
     platform: process.platform,
@@ -234,6 +237,7 @@ function setupIpc() {
   ipcMain.on('state:set', (_e, patch) => {
     const allowed = {};
     for (const k of ['voice', 'muted', 'deafened', 'sharing']) if (k in patch) allowed[k] = !!patch[k];
+    if ('quality' in patch) allowed.quality = String(patch.quality || '').replace(/[^0-9p]/g, '').slice(0, 8);
     node.setState(allowed);
   });
 

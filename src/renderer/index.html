@@ -192,14 +192,24 @@
       </div>
       <div class="sources" id="sources"></div>
       <div class="screen-options">
-        <label class="field inline">
-          <span>Qualidade</span>
-          <select id="screen-quality">
-            <option value="light">Leve — 720p, 15 fps</option>
-            <option value="standard" selected>Padrão — 1080p, 30 fps</option>
-            <option value="smooth">Fluida — 1080p, 60 fps (jogos)</option>
-          </select>
-        </label>
+        <div class="quality">
+          <label class="field inline">
+            <span>Resolução</span>
+            <select id="screen-res">
+              <option value="480">480p</option>
+              <option value="720">720p</option>
+              <option value="1080" selected>1080p</option>
+            </select>
+          </label>
+          <label class="field inline">
+            <span>Fps</span>
+            <select id="screen-fps">
+              <option value="30" selected>30 fps</option>
+              <option value="60">60 fps</option>
+            </select>
+          </label>
+          <small class="hint" id="screen-hint"></small>
+        </div>
         <label class="check">
           <input type="checkbox" id="screen-audio" />
           <span>Incluir o som do computador</span>

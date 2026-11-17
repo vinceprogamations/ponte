@@ -9,7 +9,7 @@ let peers = [];
 let view = 'chat';
 let unread = 0;
 let logLines = [];
-const local = { voice: false, muted: false, deafened: false, sharing: false };
+const local = { voice: false, muted: false, deafened: false, sharing: false, quality: '' };
 let micStream = null;
 let screenStream = null;
 let screenQuality = null;
@@ -23,11 +23,26 @@ const remotes = new Map();
 const meters = new Map();
 const speaking = new Set();
 
-const QUALITY = {
-  light: { w: 1280, h: 720, fps: 15, bitrate: 1_500_000, hint: 'detail' },
-  standard: { w: 1920, h: 1080, fps: 30, bitrate: 4_000_000, hint: 'detail' },
-  smooth: { w: 1920, h: 1080, fps: 60, bitrate: 8_000_000, hint: 'motion' },
+// Resolução (altura) -> tamanho máximo e taxa de bits a 30 fps. A 60 fps a taxa sobe 60%.
+const RESOLUTIONS = {
+  480: { w: 848, h: 480, kbps: 1500 },
+  720: { w: 1280, h: 720, kbps: 2500 },
+  1080: { w: 1920, h: 1080, kbps: 4500 },
 };
+function qualityFor(res, fps) {
+  res = RESOLUTIONS[res] ? Number(res) : 1080;
+  fps = Number(fps) === 60 ? 60 : 30;
+  const r = RESOLUTIONS[res];
+  return {
+    label: `${res}p${fps}`,
+    w: r.w,
+    h: r.h,
+    fps,
+    bitrate: Math.round(r.kbps * (fps === 60 ? 1.6 : 1) * 1000),
+    // 'detail' faz o WebRTC preservar a resolução escolhida; se faltar banda, cede fps.
+    hint: 'detail',
+  };
+}
 
 const prefs = (() => {
   const read = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } };
@@ -259,7 +274,7 @@ function onSignal({ from, data }) {
         const collision = desc.type === 'offer' && (c.makingOffer || pc.signalingState !== 'stable');
         c.ignoreOffer = !c.polite && collision;
         if (c.ignoreOffer) return;
-        await pc.setRemoteDescription(desc);
+        await pc.setRemoteDescription({ type: desc.type, sdp: lanBitrate(desc.sdp) });
         if (desc.type === 'offer') {
           await pc.setLocalDescription();
           api.sendSignal(from, { description: { type: pc.localDescription.type, sdp: pc.localDescription.sdp } });
@@ -271,6 +286,39 @@ function onSignal({ from, data }) {
       log(`Erro de sinalização com ${p.name}: ${err.message}`);
     }
   });
+}
+
+/**
+ * O WebRTC começa estimando pouca banda e leva ~20 s para chegar em 1080p.
+ * Numa LAN dá para começar alto: indica 4 Mbps iniciais aos codecs de vídeo.
+ */
+const START_KBPS = 4000;
+function lanBitrate(sdp) {
+  if (!sdp || !sdp.includes('m=video')) return sdp;
+  // Nunca começa acima do teto da qualidade escolhida.
+  const startKbps = Math.min(START_KBPS, screenQuality ? Math.round(screenQuality.bitrate / 1000) : START_KBPS);
+  const lines = sdp.split('\r\n');
+  const out = [];
+  let inVideo = false;
+  const withFmtp = new Set();
+  for (const l of lines) {
+    if (l.startsWith('m=')) inVideo = l.startsWith('m=video');
+    const f = inVideo && /^a=fmtp:(\d+) /.exec(l);
+    if (f) withFmtp.add(f[1]);
+  }
+  inVideo = false;
+  for (const l of lines) {
+    if (l.startsWith('m=')) inVideo = l.startsWith('m=video');
+    const fmtp = inVideo && /^a=fmtp:(\d+) (.*)$/.exec(l);
+    if (fmtp && !/apt=|x-google-start-bitrate/.test(fmtp[2])) {
+      out.push(`${l};x-google-start-bitrate=${startKbps}`);
+      continue;
+    }
+    out.push(l);
+    const rtpmap = inVideo && /^a=rtpmap:(\d+) (VP8|VP9|H264|AV1)\//i.exec(l);
+    if (rtpmap && !withFmtp.has(rtpmap[1])) out.push(`a=fmtp:${rtpmap[1]} x-google-start-bitrate=${startKbps}`);
+  }
+  return out.join('\r\n');
 }
 
 function onRemoteTrack(id, track, stream) {
@@ -397,7 +445,9 @@ async function openScreenPicker() {
   if (!local.voice) return;
   selectedSource = null;
   $('#screen-go').disabled = true;
-  $('#screen-quality').value = prefs.read('quality', 'standard');
+  $('#screen-res').value = String(prefs.read('screenRes', 1080));
+  $('#screen-fps').value = String(prefs.read('screenFps', 30));
+  updateQualityHint();
   $('#screen-audio').checked = prefs.read('screenAudio', false);
   $('#screen-audio').closest('label').hidden = me.platform !== 'win32';
   $('#sources').innerHTML = '<p class="waiting">Carregando…</p>';
@@ -428,28 +478,39 @@ function renderSources() {
   }
 }
 
-async function startScreen(sourceId, qualityKey, withAudio) {
-  screenQuality = QUALITY[qualityKey] || QUALITY.standard;
+function updateQualityHint() {
+  const q = qualityFor($('#screen-res').value, $('#screen-fps').value);
+  const mbps = (q.bitrate / 1_000_000).toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+  $('#screen-hint').textContent = `até ${mbps} Mbps${q.fps === 60 ? ' · mais fluido, bom para jogos' : ''}`;
+}
+
+async function startScreen(sourceId, quality, withAudio) {
+  screenQuality = quality;
   api.selectScreen({ id: sourceId, audio: withAudio });
+  const size = {
+    width: { ideal: quality.w, max: quality.w },
+    height: { ideal: quality.h, max: quality.h },
+    frameRate: { ideal: quality.fps, max: quality.fps },
+  };
   try {
-    screenStream = await navigator.mediaDevices.getDisplayMedia({
-      video: {
-        width: { ideal: screenQuality.w },
-        height: { ideal: screenQuality.h },
-        frameRate: { ideal: screenQuality.fps, max: screenQuality.fps },
-      },
-      audio: withAudio,
-    });
+    screenStream = me.autotestCanvas
+      ? testPattern(quality)
+      : await navigator.mediaDevices.getDisplayMedia({ video: size, audio: withAudio });
   } catch (err) {
     toast(`Não foi possível capturar a tela: ${err.message}`);
     return;
   }
   const vt = screenStream.getVideoTracks()[0];
   if (vt) {
-    vt.contentHint = screenQuality.hint;
+    vt.contentHint = quality.hint;
     vt.onended = () => stopScreen();
+    // Garante o limite mesmo se a captura ignorar as restrições iniciais.
+    await vt.applyConstraints(size).catch(() => {});
+    const s = vt.getSettings();
+    log(`Transmitindo ${quality.label}: captura ${s.width}x${s.height} a ${Math.round(s.frameRate)} fps`);
   }
   local.sharing = true;
+  local.quality = quality.label;
   pushState();
   for (const c of conns.values()) addScreenTo(c);
   focusedTile = null;
@@ -457,9 +518,16 @@ async function startScreen(sourceId, qualityKey, withAudio) {
 }
 
 function addScreenTo(c) {
-  for (const t of [...screenStream.getVideoTracks(), ...screenStream.getAudioTracks()]) {
-    c.screenSenders.push(c.pc.addTrack(t, screenStream));
+  for (const t of screenStream.getVideoTracks()) {
+    // Limites definidos já na criação, antes de o codificador começar.
+    const tr = c.pc.addTransceiver(t, {
+      direction: 'sendonly',
+      streams: [screenStream],
+      sendEncodings: [{ maxBitrate: screenQuality.bitrate, maxFramerate: screenQuality.fps }],
+    });
+    c.screenSenders.push(tr.sender);
   }
+  for (const t of screenStream.getAudioTracks()) c.screenSenders.push(c.pc.addTrack(t, screenStream));
   tuneScreenSenders(c);
 }
 
@@ -473,7 +541,7 @@ function tuneScreenSenders(c, attempt = 0) {
     if (!params.encodings || !params.encodings.length) { pending = true; continue; }
     params.encodings[0].maxBitrate = screenQuality.bitrate;
     params.encodings[0].maxFramerate = screenQuality.fps;
-    params.degradationPreference = screenQuality.hint === 'motion' ? 'maintain-framerate' : 'maintain-resolution';
+    params.degradationPreference = 'maintain-resolution';
     s.setParameters(params).catch(() => {});
   }
   if (pending && attempt < 10) setTimeout(() => tuneScreenSenders(c, attempt + 1), 700);
@@ -489,6 +557,7 @@ function stopScreen(push = true) {
   screenStream = null;
   screenQuality = null;
   local.sharing = false;
+  local.quality = '';
   if (focusedTile === `screen:${me.id}`) focusedTile = null;
   if (push) pushState();
   render();
@@ -671,10 +740,10 @@ function renderStage() {
   const stage = $('#stage');
   const wanted = [];
   if (local.voice) {
-    if (local.sharing && screenStream) wanted.push({ key: `screen:${me.id}`, kind: 'screen', id: me.id, name: `${me.name} (você)`, stream: screenStream, mine: true });
+    if (local.sharing && screenStream) wanted.push({ key: `screen:${me.id}`, kind: 'screen', id: me.id, name: `${me.name} (você)`, stream: screenStream, mine: true, quality: local.quality });
     for (const p of voicePeers()) {
       const r = remotes.get(p.id);
-      if (p.state.sharing) wanted.push({ key: `screen:${p.id}`, kind: 'screen', id: p.id, name: p.name, stream: r && r.screen });
+      if (p.state.sharing) wanted.push({ key: `screen:${p.id}`, kind: 'screen', id: p.id, name: p.name, stream: r && r.screen, quality: p.state.quality });
     }
     wanted.push({ key: `user:${me.id}`, kind: 'user', id: me.id, name: me.name, state: local, mine: true });
     for (const p of voicePeers()) wanted.push({ key: `user:${p.id}`, kind: 'user', id: p.id, name: p.name, state: p.state });
@@ -729,6 +798,12 @@ function renderStage() {
     } else {
       label.innerHTML = '<span class="live-tag">AO VIVO</span>';
       label.append(document.createTextNode(` ${w.name}`));
+      if (w.quality) {
+        const tag = document.createElement('span');
+        tag.className = 'res-tag';
+        tag.textContent = w.quality;
+        label.append(tag);
+      }
       const video = el.querySelector('video');
       if (video.srcObject !== (w.stream || null)) video.srcObject = w.stream || null;
       el.querySelector('.waiting').hidden = !!w.stream;
@@ -864,12 +939,16 @@ function bind() {
   });
   $('#dlg-screen').addEventListener('close', () => {
     if ($('#dlg-screen').returnValue !== 'go' || !selectedSource) return;
-    const quality = $('#screen-quality').value;
+    const res = Number($('#screen-res').value);
+    const fps = Number($('#screen-fps').value);
     const audio = $('#screen-audio').checked && me.platform === 'win32';
-    prefs.write('quality', quality);
+    prefs.write('screenRes', res);
+    prefs.write('screenFps', fps);
     prefs.write('screenAudio', audio);
-    startScreen(selectedSource, quality, audio);
+    startScreen(selectedSource, qualityFor(res, fps), audio);
   });
+  $('#screen-res').onchange = updateQualityHint;
+  $('#screen-fps').onchange = updateQualityHint;
 
   $('#composer').onsubmit = (e) => { e.preventDefault(); sendChat(); };
   const input = $('#composer-input');
@@ -891,6 +970,28 @@ function bind() {
 }
 
 // ------------------------------------------------------------------ teste automático
+/** Só no autoteste: imagem sempre em movimento no lugar da tela, para medir fps reais. */
+function testPattern(q) {
+  const canvas = document.createElement('canvas');
+  canvas.width = q.w;
+  canvas.height = q.h;
+  const g = canvas.getContext('2d');
+  let frame = 0;
+  setInterval(() => {
+    frame += 1;
+    g.fillStyle = `hsl(${frame % 360} 60% 30%)`;
+    g.fillRect(0, 0, q.w, q.h);
+    for (let i = 0; i < 40; i++) {
+      g.fillStyle = `hsl(${(i * 37 + frame * 3) % 360} 80% 60%)`;
+      g.fillRect((i * 97 + frame * 9) % q.w, (i * 53 + frame * 5) % q.h, q.w / 12, q.h / 12);
+    }
+    g.fillStyle = '#fff';
+    g.font = `${Math.round(q.h / 8)}px sans-serif`;
+    g.fillText(`${q.label} #${frame}`, q.w / 20, q.h / 2);
+  }, 1000 / q.fps);
+  return canvas.captureStream(q.fps);
+}
+
 function autotest() {
   log('autoteste: ativo');
   setTimeout(async () => {
@@ -903,16 +1004,24 @@ function autotest() {
     if (!chatted && peers.length && !me.demo) { chatted = true; api.sendChat(`olá de ${me.name}`); }
     if (me.autotestShare && local.voice && !sharedOnce && [...conns.values()].some((c) => c.pc.connectionState === 'connected')) {
       sharedOnce = true;
-      startScreen(null, 'light', false);
+      startScreen(null, qualityFor(me.autotestRes || 480, me.autotestFps || 30), false);
     }
     for (const [id, c] of conns) {
       const stats = await c.pc.getStats();
       let audioIn = 0;
       let framesIn = 0;
+      let video = '';
       let pair = '';
       stats.forEach((s) => {
         if (s.type === 'inbound-rtp' && s.kind === 'audio') audioIn += s.bytesReceived || 0;
-        if (s.type === 'inbound-rtp' && s.kind === 'video') framesIn += s.framesDecoded || 0;
+        if (s.type === 'inbound-rtp' && s.kind === 'video') {
+          framesIn += s.framesDecoded || 0;
+          video = ` recebendo=${s.frameWidth}x${s.frameHeight}@${s.framesPerSecond || 0}fps`;
+        }
+        if (s.type === 'outbound-rtp' && s.kind === 'video') {
+          const src = [...stats.values()].find((x) => x.type === 'media-source' && x.kind === 'video');
+          video += ` enviando=${s.frameWidth}x${s.frameHeight}@${s.framesPerSecond || 0}fps fonte=${src ? `${src.width}x${src.height}@${src.framesPerSecond}` : '?'} limite=${s.qualityLimitationReason} enc=${s.encoderImplementation} kbps=${Math.round((s.targetBitrate || 0) / 1000)}`;
+        }
         if (s.type === 'candidate-pair' && s.state === 'succeeded' && s.nominated) {
           const l = stats.get(s.localCandidateId);
           const r = stats.get(s.remoteCandidateId);
@@ -920,7 +1029,7 @@ function autotest() {
         }
       });
       const name = (peerById(id) || {}).name;
-      log(`autoteste: ${name} estado=${c.pc.connectionState} audioBytes=${audioIn} videoFrames=${framesIn} rota=${pair} chat=${document.querySelectorAll('.msg-text').length}`);
+      log(`autoteste: ${name} estado=${c.pc.connectionState} audioBytes=${audioIn} videoFrames=${framesIn}${video} rota=${pair} chat=${document.querySelectorAll('.msg-text').length}`);
     }
   }, 3000);
 }

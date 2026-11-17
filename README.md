@@ -33,7 +33,7 @@ Feito para jogar com os amigos pelo Radmin VPN, sem servidor e sem conta.
 |---|---|
 | 💬 **Chat** | Canal `#geral` com histórico salvo nos dois computadores e sincronizado quando alguém volta. |
 | 🎙️ **Voz** | Sala de voz com cancelamento de eco e ruído, silenciar e ensurdecer, volume por pessoa e indicador de quem está falando. |
-| 🖥️ **Tela** | Compartilhe uma tela ou janela em até 1080p a 60 fps, com o som do computador se quiser. Clique para ampliar e dê dois cliques para tela cheia. |
+| 🖥️ **Tela** | Compartilhe uma tela ou janela em **480p, 720p ou 1080p**, a **30 ou 60 fps**, com o som do computador se quiser. Clique para ampliar e dê dois cliques para tela cheia. |
 | 📡 **Descoberta automática** | Sem digitar IP: a Ponte encontra quem está na rede. Se precisar, dá para adicionar um IP manualmente. |
 | 🔒 **Sem servidor** | Tudo vai direto de um computador para o outro. Nada passa pela internet além do próprio Radmin. |
 
