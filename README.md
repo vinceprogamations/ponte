@@ -33,7 +33,8 @@ Feito para jogar com os amigos pelo Radmin VPN, sem servidor e sem conta.
 |---|---|
 | 💬 **Chat** | Canal `#geral` com histórico salvo nos dois computadores e sincronizado quando alguém volta. |
 | 🎙️ **Voz** | Sala de voz com cancelamento de eco e ruído, silenciar e ensurdecer, volume por pessoa e indicador de quem está falando. |
-| 🖥️ **Tela** | Compartilhe uma tela ou janela em **480p, 720p ou 1080p**, a **30 ou 60 fps**, com o som do computador se quiser. Clique para ampliar e dê dois cliques para tela cheia. |
+| 🖥️ **Tela** | Compartilhe uma tela ou janela em **480p, 720p ou 1080p**, a **30 ou 60 fps**, com o som do computador se quiser. Todos podem transmitir ao mesmo tempo: clique numa tela para ampliar (as outras viram miniaturas) e dê dois cliques para tela cheia. |
+| 🫧 **Visual do iOS** | Títulos grandes e em negrito, cartões arredondados e **Liquid Glass** de verdade, com refração nas bordas do vidro. Dá para desligar o vidro em Ajustes. |
 | 📡 **Descoberta automática** | Sem digitar IP: a Ponte encontra quem está na rede. Se precisar, dá para adicionar um IP manualmente. |
 | 🔒 **Sem servidor** | Tudo vai direto de um computador para o outro. Nada passa pela internet além do próprio Radmin. |
 
@@ -77,7 +78,7 @@ ponte/
 │   │   ├── main.js      janela, captura de tela, histórico, IPC
 │   │   ├── lan.js       descoberta UDP + conexões TCP (Node puro)
 │   │   └── preload.js   ponte segura entre a interface e o main
-│   └── renderer/        interface (HTML/CSS/JS) e WebRTC
+│   └── renderer/        interface (HTML/CSS/JS), Liquid Glass (glass.js) e WebRTC
 ├── build/               ícone e script extra do instalador (firewall)
 ├── scripts/             utilitários (gerar ícone)
 ├── test/                teste da camada de rede
@@ -127,4 +128,4 @@ e os bytes de áudio e vídeo recebidos. Um nome com "compartilha" também trans
 
 ## Licença
 
-[MIT](LICENSE)
+[MIT](LICENSE). A fonte [Inter](https://rsms.me/inter/) vem junto com o app sob a [SIL Open Font License](src/renderer/fonts/LICENSE-Inter.txt).

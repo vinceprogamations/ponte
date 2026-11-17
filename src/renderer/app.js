@@ -58,7 +58,7 @@ const log = (line) => {
 };
 
 // ------------------------------------------------------------------ util
-const COLORS = ['#f0a050', '#7cc6fe', '#b8e986', '#f78fb3', '#c9a7ff', '#ffd166', '#5ee6c5', '#ff9a8b'];
+const COLORS = ['#ff9f0a', '#64d2ff', '#30d158', '#ff375f', '#bf5af2', '#ffd60a', '#5e5ce6', '#ff6961', '#66d4cf'];
 function colorFor(id) {
   let h = 0;
   for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
@@ -573,13 +573,13 @@ function appendMessage(m, { quiet = false } = {}) {
   const sameAuthor = lastMsg && lastMsg.from === m.from && m.ts - lastMsg.ts < 5 * 60 * 1000;
   if (sameAuthor) {
     const line = document.createElement('div');
-    line.className = 'msg-line';
+    line.className = `msg-line${m.from === me.id ? ' mine' : ''}`;
     line.innerHTML = `<div class="msg-text">${linkify(m.text)}</div>`;
     line.title = time.toLocaleString();
     box.append(line);
   } else {
     const g = document.createElement('div');
-    g.className = 'msg-group';
+    g.className = `msg-group${m.from === me.id ? ' mine' : ''}`;
     g.append(avatar(m.from, m.name));
     const head = document.createElement('div');
     head.className = 'msg-head';
@@ -645,13 +645,13 @@ function setView(v) {
   $('#ch-chat').classList.toggle('active', v === 'chat');
   $('#ch-voice').classList.toggle('active', v === 'voice');
   if (v === 'chat') {
-    $('#view-title').innerHTML = '<span class="hash">#</span> geral';
-    $('#view-sub').textContent = 'Mensagens ficam salvas só nos computadores de vocês';
+    $('#view-title').textContent = 'Conversa';
+    $('#view-sub').textContent = '#geral · as mensagens ficam só nos computadores de vocês';
     unread = 0;
     renderUnread();
     setTimeout(() => $('#composer-input').focus(), 0);
   } else {
-    $('#view-title').innerHTML = `${ICON.voice} Sala de voz`;
+    $('#view-title').textContent = 'Sala de voz';
     $('#view-sub').textContent = 'Áudio e vídeo vão direto de um computador para o outro';
   }
   render();
@@ -721,8 +721,10 @@ function render() {
     li.append(info);
     const flags = document.createElement('div');
     flags.className = 'member-flags';
-    if (p.state.sharing) flags.insertAdjacentHTML('beforeend', ICON.screen);
-    else if (p.state.voice) flags.insertAdjacentHTML('beforeend', ICON.voice);
+    const tag = document.createElement('span');
+    if (p.state.sharing) { tag.className = 'pill-tag live'; tag.textContent = 'Ao vivo'; }
+    else if (p.state.voice) { tag.className = 'pill-tag voice'; tag.textContent = 'Na voz'; }
+    if (tag.textContent) flags.append(tag);
     li.append(flags);
     ml.append(li);
   }
@@ -758,6 +760,7 @@ function renderStage() {
     if (!el) {
       el = document.createElement('div');
       el.className = `tile ${w.kind}`;
+      el.style.setProperty('--c', colorFor(w.id));
       if (w.kind === 'user') {
         el.dataset.speak = w.id;
         el.append(avatar(w.id, w.name));
@@ -819,6 +822,7 @@ function renderStage() {
 async function openSettings() {
   $('#set-name').value = me.name;
   $('#set-sounds').checked = prefs.read('sounds', true);
+  $('#set-glass').checked = prefs.read('glass', true);
   renderIps();
   $('#set-log').textContent = logLines.slice(-60).join('\n') || 'Sem eventos ainda.';
   try {
@@ -882,6 +886,8 @@ async function saveSettings() {
   const name = $('#set-name').value.trim();
   if (name && name !== me.name) me = { ...me, ...(await api.setName(name)) };
   prefs.write('sounds', $('#set-sounds').checked);
+  prefs.write('glass', $('#set-glass').checked);
+  applyGlass();
   const out = $('#set-out').value;
   prefs.write('outDevice', out);
   for (const r of remotes.values()) for (const el of r.audios.values()) if (el.setSinkId) el.setSinkId(out).catch(() => {});
@@ -910,6 +916,10 @@ async function switchMic() {
   }
 }
 
+function applyGlass() {
+  document.documentElement.classList.toggle('no-glass', !prefs.read('glass', true));
+}
+
 // ------------------------------------------------------------------ eventos
 function bind() {
   $('#ch-chat').onclick = () => setView('chat');
@@ -928,7 +938,12 @@ function bind() {
   $('#btn-add-ip').onclick = async () => { await openSettings(); $('#set-host').focus(); };
   $('#set-host-add').onclick = addHost;
   $('#set-host').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); addHost(); } };
-  $('#dlg-settings').addEventListener('close', () => { if ($('#dlg-settings').returnValue === 'save') saveSettings(); });
+  $('#dlg-settings').addEventListener('close', () => {
+    const dlg = $('#dlg-settings');
+    const value = dlg.returnValue;
+    dlg.returnValue = '';
+    if (value === 'save') saveSettings();
+  });
 
   document.querySelectorAll('#dlg-screen .tab').forEach((tab) => {
     tab.onclick = () => {
@@ -938,7 +953,10 @@ function bind() {
     };
   });
   $('#dlg-screen').addEventListener('close', () => {
-    if ($('#dlg-screen').returnValue !== 'go' || !selectedSource) return;
+    const dlg = $('#dlg-screen');
+    const value = dlg.returnValue;
+    dlg.returnValue = '';
+    if (value !== 'go' || !selectedSource) return;
     const res = Number($('#screen-res').value);
     const fps = Number($('#screen-fps').value);
     const audio = $('#screen-audio').checked && me.platform === 'win32';
@@ -994,11 +1012,13 @@ function testPattern(q) {
 
 function autotest() {
   log('autoteste: ativo');
+  if (me.autotestDialog === 'settings') setTimeout(openSettings, 3000);
   setTimeout(async () => {
     await joinVoice();
     if (me.autotestView === 'chat') setView('chat');
   }, 1500);
   let sharedOnce = false;
+  let glassLogged = false;
   let chatted = false;
   setInterval(async () => {
     if (!chatted && peers.length && !me.demo) { chatted = true; api.sendChat(`olá de ${me.name}`); }
@@ -1006,6 +1026,11 @@ function autotest() {
       sharedOnce = true;
       startScreen(null, qualityFor(me.autotestRes || 480, me.autotestFps || 30), false);
     }
+    if (me.autotestFocus && !focusedTile) {
+      const other = voicePeers().find((p) => p.state.sharing && remotes.get(p.id)?.screen);
+      if (other) { focusedTile = `screen:${other.id}`; renderStage(); }
+    }
+    if (!glassLogged) { glassLogged = true; log(`vidro: ${document.querySelectorAll('.liquid-on').length} painéis com refração; filtro=${getComputedStyle($('#composer')).backdropFilter}`); }
     for (const [id, c] of conns) {
       const stats = await c.pc.getStats();
       let audioIn = 0;
@@ -1036,10 +1061,11 @@ function autotest() {
 
 // ------------------------------------------------------------------ início
 (async () => {
+  applyGlass();
   bind();
   const init = await api.init();
   me = init.me;
-  me.autotestShare = /compartilha/i.test(me.name);
+  me.autotestShare = me.autotestShare || /compartilha/i.test(me.name);
   peers = init.peers;
   renderHistory(init.history);
   setView('chat');
