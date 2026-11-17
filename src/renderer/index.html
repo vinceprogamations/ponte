@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob: mediastream:;" />
+  <title>Ponte</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Coluna da rede e canais -->
+    <aside class="sidebar">
+      <header class="net-head">
+        <div class="logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M3 17h18M5 17v-4a7 7 0 0 1 14 0v4M9 17v-3M15 17v-3M12 17v-4" /></svg>
+        </div>
+        <div class="net-title">
+          <h1>Rede local</h1>
+          <p id="my-ip">—</p>
+        </div>
+        <button class="icon-btn" id="btn-settings" title="Configurações">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </button>
+      </header>
+
+      <nav class="channels">
+        <div class="section-label">Texto</div>
+        <button class="channel active" id="ch-chat"><span class="hash">#</span> geral <span class="badge" id="unread" hidden></span></button>
+
+        <div class="section-label">Voz</div>
+        <button class="channel" id="ch-voice">
+          <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+          Sala de voz
+        </button>
+        <ul class="voice-members" id="voice-members"></ul>
+      </nav>
+
+      <div class="voice-panel" id="voice-panel" hidden>
+        <div class="voice-status">
+          <span class="dot live"></span>
+          <div>
+            <strong>Voz conectada</strong>
+            <small id="voice-detail">Sala de voz</small>
+          </div>
+        </div>
+        <div class="voice-actions">
+          <button class="pill" id="btn-share-side" title="Compartilhar tela">
+            <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+            <span>Tela</span>
+          </button>
+          <button class="pill danger" id="btn-leave-side" title="Sair da voz">
+            <svg viewBox="0 0 24 24"><path d="M4 15c4.5-4 11.5-4 16 0l-2 3-3-1v-2.5a9 9 0 0 0-6 0V17l-3 1z"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <footer class="me-bar">
+        <div class="avatar" id="me-avatar"></div>
+        <button class="me-name" id="me-name-btn" title="Mudar nome">
+          <strong id="me-name"></strong>
+          <small id="me-status">online</small>
+        </button>
+        <button class="icon-btn" id="btn-mute" title="Silenciar microfone (Ctrl+Shift+M)">
+          <svg class="on" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+          <svg class="off" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M4 4l16 16"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-deafen" title="Ensurdecer (Ctrl+Shift+D)">
+          <svg class="on" viewBox="0 0 24 24"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/></svg>
+          <svg class="off" viewBox="0 0 24 24"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/><path d="M4 4l16 16"/></svg>
+        </button>
+      </footer>
+    </aside>
+
+    <!-- Área principal -->
+    <main class="main">
+      <header class="topbar">
+        <span class="topbar-title" id="view-title"><span class="hash">#</span> geral</span>
+        <span class="topbar-sub" id="view-sub">Mensagens ficam salvas só nos computadores de vocês</span>
+      </header>
+
+      <section class="view" id="view-chat">
+        <div class="messages" id="messages"></div>
+        <form class="composer" id="composer">
+          <textarea id="composer-input" rows="1" placeholder="Conversar em #geral" maxlength="4000"></textarea>
+          <button type="submit" class="send" title="Enviar">
+            <svg viewBox="0 0 24 24"><path d="M4 12 20 4l-6 16-2.5-6.5z"/></svg>
+          </button>
+        </form>
+      </section>
+
+      <section class="view" id="view-voice" hidden>
+        <div class="stage" id="stage"></div>
+        <div class="stage-empty" id="stage-empty" hidden>
+          <div class="big-icon">
+            <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+          </div>
+          <h2>Sala de voz</h2>
+          <p>Entre para falar e compartilhar a tela com quem estiver na rede.</p>
+          <button class="primary" id="btn-join">Entrar na voz</button>
+        </div>
+        <div class="controls" id="controls" hidden>
+          <button class="round" id="ctl-mute" title="Microfone">
+            <svg class="on" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+            <svg class="off" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M4 4l16 16"/></svg>
+          </button>
+          <button class="round" id="ctl-deafen" title="Áudio">
+            <svg class="on" viewBox="0 0 24 24"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/></svg>
+            <svg class="off" viewBox="0 0 24 24"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/><path d="M4 4l16 16"/></svg>
+          </button>
+          <button class="round wide" id="ctl-share" title="Compartilhar tela">
+            <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
+            <span id="ctl-share-label">Compartilhar tela</span>
+          </button>
+          <button class="round danger" id="ctl-leave" title="Sair da voz">
+            <svg viewBox="0 0 24 24"><path d="M4 15c4.5-4 11.5-4 16 0l-2 3-3-1v-2.5a9 9 0 0 0-6 0V17l-3 1z"/></svg>
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <!-- Membros -->
+    <aside class="members">
+      <div class="section-label">Online — <span id="online-count">1</span></div>
+      <ul class="member-list" id="member-list"></ul>
+      <div class="searching" id="searching">
+        <div class="radar"><span></span><span></span></div>
+        <p><strong>Procurando na rede…</strong></p>
+        <p>Quem abrir a Ponte na mesma rede do Radmin VPN aparece aqui sozinho.</p>
+        <button class="link" id="btn-add-ip">Adicionar IP manualmente</button>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Configurações -->
+  <dialog id="dlg-settings">
+    <form method="dialog" class="dialog">
+      <header><h2>Configurações</h2><button class="icon-btn" value="close" title="Fechar">✕</button></header>
+
+      <label class="field">
+        <span>Seu nome</span>
+        <input id="set-name" maxlength="40" />
+      </label>
+
+      <div class="field">
+        <span>Seus endereços</span>
+        <ul class="ip-list" id="set-ips"></ul>
+        <small>Passe o IP do Radmin para seu amigo se a descoberta automática não funcionar.</small>
+      </div>
+
+      <div class="field">
+        <span>IPs adicionados manualmente</span>
+        <div class="row">
+          <input id="set-host" placeholder="ex.: 26.12.34.56" />
+          <button type="button" class="secondary" id="set-host-add">Adicionar</button>
+        </div>
+        <ul class="ip-list" id="set-hosts"></ul>
+      </div>
+
+      <div class="grid2">
+        <label class="field">
+          <span>Microfone</span>
+          <select id="set-mic"></select>
+        </label>
+        <label class="field">
+          <span>Saída de áudio</span>
+          <select id="set-out"></select>
+        </label>
+      </div>
+
+      <label class="check">
+        <input type="checkbox" id="set-sounds" checked />
+        <span>Sons de entrada, saída e mensagem</span>
+      </label>
+
+      <details class="field">
+        <summary>Diagnóstico da rede</summary>
+        <pre id="set-log"></pre>
+      </details>
+
+      <footer><button class="primary" id="set-save" value="save">Salvar</button></footer>
+    </form>
+  </dialog>
+
+  <!-- Escolha de tela -->
+  <dialog id="dlg-screen">
+    <form method="dialog" class="dialog wide">
+      <header><h2>Compartilhar tela</h2><button class="icon-btn" value="cancel" title="Fechar">✕</button></header>
+      <div class="tabs">
+        <button type="button" class="tab active" data-kind="screen">Telas</button>
+        <button type="button" class="tab" data-kind="window">Janelas</button>
+      </div>
+      <div class="sources" id="sources"></div>
+      <div class="screen-options">
+        <label class="field inline">
+          <span>Qualidade</span>
+          <select id="screen-quality">
+            <option value="light">Leve — 720p, 15 fps</option>
+            <option value="standard" selected>Padrão — 1080p, 30 fps</option>
+            <option value="smooth">Fluida — 1080p, 60 fps (jogos)</option>
+          </select>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="screen-audio" />
+          <span>Incluir o som do computador</span>
+        </label>
+      </div>
+      <footer>
+        <button class="secondary" value="cancel">Cancelar</button>
+        <button class="primary" id="screen-go" value="go" disabled>Compartilhar</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

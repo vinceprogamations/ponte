@@ -1,0 +1,55 @@
+{
+  "name": "ponte",
+  "productName": "Ponte",
+  "version": "1.0.0",
+  "description": "Chat, voz e compartilhamento de tela direto pela LAN / Radmin VPN, sem servidor.",
+  "author": "vinceprogamations",
+  "license": "MIT",
+  "homepage": "https://github.com/vinceprogamations/ponte",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vinceprogamations/ponte.git"
+  },
+  "main": "src/main/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node test/lan.test.js",
+    "icon": "electron scripts/make-icon.js",
+    "dist": "electron-builder --win nsis --publish never"
+  },
+  "build": {
+    "appId": "io.github.vinceprogamations.ponte",
+    "productName": "Ponte",
+    "copyright": "MIT · vinceprogamations",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": true,
+      "runAfterFinish": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Ponte",
+      "deleteAppDataOnUninstall": false,
+      "include": "build/installer.nsh",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "artifactName": "Ponte-Instalar.exe"
+    }
+  },
+  "devDependencies": {
+    "electron": "45.3.4",
+    "electron-builder": "26.0.12"
+  }
+}

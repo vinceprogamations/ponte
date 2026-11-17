@@ -1,0 +1,25 @@
+'use strict';
+const { contextBridge, ipcRenderer } = require('electron');
+
+const on = (channel) => (fn) => {
+  const handler = (_e, payload) => fn(payload);
+  ipcRenderer.on(channel, handler);
+  return () => ipcRenderer.removeListener(channel, handler);
+};
+
+contextBridge.exposeInMainWorld('ponte', {
+  init: () => ipcRenderer.invoke('init'),
+  sendChat: (text) => ipcRenderer.invoke('chat:send', text),
+  sendSignal: (to, data) => ipcRenderer.send('signal:send', { to, data }),
+  setState: (patch) => ipcRenderer.send('state:set', patch),
+  setName: (name) => ipcRenderer.invoke('name:set', name),
+  addHost: (ip) => ipcRenderer.invoke('host:add', ip),
+  removeHost: (ip) => ipcRenderer.invoke('host:remove', ip),
+  screenSources: () => ipcRenderer.invoke('screen:sources'),
+  selectScreen: (choice) => ipcRenderer.send('screen:select', choice),
+  log: (line) => ipcRenderer.send('log', String(line)),
+  onPeers: on('peers'),
+  onChat: on('chat'),
+  onSignal: on('signal'),
+  onLog: on('log'),
+});
