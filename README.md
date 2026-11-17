@@ -33,7 +33,8 @@ Feito para jogar com os amigos pelo Radmin VPN, sem servidor e sem conta.
 |---|---|
 | 💬 **Chat** | Canal `#geral` com histórico salvo nos dois computadores e sincronizado quando alguém volta. |
 | 🎙️ **Voz** | Sala de voz com cancelamento de eco e ruído, silenciar e ensurdecer, volume por pessoa e indicador de quem está falando. |
-| 🖥️ **Tela** | Compartilhe uma tela ou janela em **480p, 720p ou 1080p**, a **30 ou 60 fps**, com o som do computador se quiser. Todos podem transmitir ao mesmo tempo: clique numa tela para ampliar (as outras viram miniaturas) e dê dois cliques para tela cheia. |
+| 🖥️ **Tela** | Compartilhe uma tela ou janela em **480p, 720p ou 1080p**, a **30 ou 60 fps**, Todos podem transmitir ao mesmo tempo: clique numa tela para ampliar (as outras viram miniaturas) e use o botão ⛶ ou dois cliques para **tela cheia**. |
+| 🔊 **Som sem retorno** | Transmita **só o som do jogo**, como no Discord: a Ponte captura o áudio de um app específico, então a voz do Discord (ou da própria Ponte) não volta para quem está ouvindo. |
 | 🫧 **Visual do iOS** | Títulos grandes e em negrito, cartões arredondados e **Liquid Glass** de verdade, com refração nas bordas do vidro. Dá para desligar o vidro em Ajustes. |
 | 📡 **Descoberta automática** | Sem digitar IP: a Ponte encontra quem está na rede. Se precisar, dá para adicionar um IP manualmente. |
 | 🔒 **Sem servidor** | Tudo vai direto de um computador para o outro. Nada passa pela internet além do próprio Radmin. |
@@ -66,6 +67,8 @@ flowchart LR
   inclusive `26.255.255.255` do Radmin, e por unicast para IPs já conhecidos.
 - **Canal de controle:** uma conexão TCP por amigo leva o chat, o estado (na voz, mudo, transmitindo)
   e a negociação do WebRTC.
+- **Som por app:** o [`native/ponte-audio.cpp`](native/ponte-audio.cpp) usa a captura de áudio por processo do Windows
+  (WASAPI, Windows 10 2004+) e manda o PCM para a Ponte, que vira uma trilha do WebRTC.
 - **Mídia:** WebRTC ponto a ponto **sem STUN/TURN**, usando só os IPs locais e da VPN. Se a conexão
   não sobe em cerca de 10 s, ela é refeita sozinha.
 
@@ -79,6 +82,7 @@ ponte/
 │   │   ├── lan.js       descoberta UDP + conexões TCP (Node puro)
 │   │   └── preload.js   ponte segura entre a interface e o main
 │   └── renderer/        interface (HTML/CSS/JS), Liquid Glass (glass.js) e WebRTC
+├── native/              ponte-audio.cpp: captura o som de um app só
 ├── build/               ícone e script extra do instalador (firewall)
 ├── scripts/             utilitários (gerar ícone)
 ├── test/                teste da camada de rede
@@ -88,7 +92,8 @@ ponte/
 
 ## Desenvolvimento
 
-Requer Node.js 22 ou mais novo.
+Requer Node.js 22 ou mais novo e, para o som por app, o compilador C++ do Visual Studio 2022
+(workload "Desenvolvimento para desktop com C++"). `npm run dist` compila o auxiliar sozinho.
 
 ```bash
 npm install

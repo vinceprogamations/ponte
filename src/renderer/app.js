@@ -87,6 +87,8 @@ const ICON = {
   deaf: '<svg viewBox="0 0 24 24"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/><path d="M4 4l16 16"/></svg>',
   voice: '<svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>',
   screen: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>',
+  expand: '<svg class="expand" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
+  shrink: '<svg class="shrink" viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>',
 };
 let toastTimer = null;
 function toast(text, ms = 4000) {
@@ -294,21 +296,30 @@ function onSignal({ from, data }) {
  */
 const START_KBPS = 4000;
 function lanBitrate(sdp) {
-  if (!sdp || !sdp.includes('m=video')) return sdp;
+  if (!sdp) return sdp;
   // Nunca começa acima do teto da qualidade escolhida.
   const startKbps = Math.min(START_KBPS, screenQuality ? Math.round(screenQuality.bitrate / 1000) : START_KBPS);
   const lines = sdp.split('\r\n');
   const out = [];
   let inVideo = false;
   const withFmtp = new Set();
+  const opus = new Set();
   for (const l of lines) {
     if (l.startsWith('m=')) inVideo = l.startsWith('m=video');
     const f = inVideo && /^a=fmtp:(\d+) /.exec(l);
     if (f) withFmtp.add(f[1]);
+    const o = /^a=rtpmap:(\d+) opus\//i.exec(l);
+    if (o) opus.add(o[1]);
   }
   inVideo = false;
   for (const l of lines) {
     if (l.startsWith('m=')) inVideo = l.startsWith('m=video');
+    // Som da transmissão (jogo, música): Opus em estéreo e com mais qualidade.
+    const audioFmtp = !inVideo && /^a=fmtp:(\d+) (.*)$/.exec(l);
+    if (audioFmtp && opus.has(audioFmtp[1]) && !/stereo=/.test(audioFmtp[2])) {
+      out.push(`${l};stereo=1;sprop-stereo=1;maxaveragebitrate=128000`);
+      continue;
+    }
     const fmtp = inVideo && /^a=fmtp:(\d+) (.*)$/.exec(l);
     if (fmtp && !/apt=|x-google-start-bitrate/.test(fmtp[2])) {
       out.push(`${l};x-google-start-bitrate=${startKbps}`);
@@ -448,17 +459,116 @@ async function openScreenPicker() {
   $('#screen-res').value = String(prefs.read('screenRes', 1080));
   $('#screen-fps').value = String(prefs.read('screenFps', 30));
   updateQualityHint();
-  $('#screen-audio').checked = prefs.read('screenAudio', false);
-  $('#screen-audio').closest('label').hidden = me.platform !== 'win32';
+  audioTouched = false;
+  audioApps = null;
+  fillAudioOptions();
   $('#sources').innerHTML = '<p class="waiting">Carregando…</p>';
   $('#dlg-screen').showModal();
   try {
-    sourceList = await api.screenSources();
+    [sourceList, audioApps] = await Promise.all([api.screenSources(), api.audioApps().catch(() => null)]);
   } catch (err) {
     $('#sources').textContent = `Falha ao listar telas: ${err.message}`;
     return;
   }
+  fillAudioOptions();
   renderSources();
+}
+
+// ------------------------------------------------------------------ som da transmissão
+let audioApps = null; // janelas com processo, vindas do ponte-audio.exe (null = indisponível)
+let audioTouched = false;
+
+const hwndOf = (sourceId) => (/^window:(\d+):/.exec(sourceId || '') || [])[1];
+function appName(a) {
+  const exe = a.exe.replace(/\.exe$/i, '');
+  return a.title && !a.title.toLowerCase().includes(exe.toLowerCase()) ? `${exe} — ${a.title}` : (a.title || exe);
+}
+
+/** Preenche "Som": sem som, só o app compartilhado, um app específico ou o PC todo. */
+function fillAudioOptions() {
+  const sel = $('#screen-audio-src');
+  const keep = sel.value;
+  sel.innerHTML = '';
+  const add = (value, label, disabled = false) => {
+    const o = document.createElement('option');
+    o.value = value;
+    o.textContent = label;
+    o.disabled = disabled;
+    sel.append(o);
+  };
+  add('none', 'Sem som');
+  if (audioApps) {
+    const isWindow = !!hwndOf(selectedSource);
+    add('shared', 'Só o app compartilhado', !isWindow);
+    const seen = new Set();
+    for (const a of audioApps) {
+      if (seen.has(a.pid)) continue;
+      seen.add(a.pid);
+      add(`app:${a.pid}`, appName(a).slice(0, 70));
+    }
+    add('all', 'Tudo do PC (menos a Ponte)');
+  }
+  $('#screen-audio-row').hidden = false;
+  if (audioTouched && [...sel.options].some((o) => o.value === keep && !o.disabled)) sel.value = keep;
+  else sel.value = hwndOf(selectedSource) && audioApps ? 'shared' : 'none';
+  updateAudioHint();
+}
+
+function updateAudioHint() {
+  const v = $('#screen-audio-src').value;
+  const hint = $('#screen-audio-hint');
+  hint.classList.toggle('warn', v === 'all');
+  hint.textContent = v === 'none'
+    ? (audioApps ? 'Só a imagem vai.' : 'Só a imagem vai. Este Windows não permite separar o som por app.')
+    : v === 'all'
+      ? 'Inclui tudo que toca no PC, até a voz do Discord: quem estiver em chamada vai se ouvir.'
+      : 'Só o som desse app vai. A voz do Discord e de outros apps fica de fora, sem retorno.';
+}
+
+/** Converte a escolha do diálogo em { mode, pid } para o ponte-audio. */
+function resolveAudioChoice(value, sourceId) {
+  if (!audioApps || value === 'none') return null;
+  if (value === 'all') return { mode: 'all' };
+  if (value === 'shared') {
+    const app = audioApps.find((a) => a.hwnd === hwndOf(sourceId));
+    return app ? { mode: 'app', pid: app.pid, name: appName(app) } : null;
+  }
+  const pid = Number(value.slice(4));
+  const app = audioApps.find((a) => a.pid === pid);
+  return { mode: 'app', pid, name: app ? appName(app) : '' };
+}
+
+let appAudio = null;
+async function startAppAudio(choice) {
+  const ctxAudio = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
+  await ctxAudio.audioWorklet.addModule('pcm-worklet.js');
+  const node = new AudioWorkletNode(ctxAudio, 'pcm-player', { numberOfInputs: 0, outputChannelCount: [2] });
+  const dest = ctxAudio.createMediaStreamDestination();
+  dest.channelCount = 2;
+  node.connect(dest);
+  const offPcm = api.onAudioPcm((u8) => {
+    const ab = u8.slice().buffer;
+    node.port.postMessage(ab, [ab]);
+  });
+  const offEnded = api.onAudioEnded(() => { if (appAudio) toast('O som da transmissão parou.'); });
+  appAudio = { ctxAudio, offPcm, offEnded };
+  try {
+    await api.audioStart({ mode: choice.mode, pid: choice.pid });
+  } catch (err) {
+    stopAppAudio();
+    throw err;
+  }
+  return dest.stream.getAudioTracks()[0];
+}
+
+function stopAppAudio() {
+  if (!appAudio) return;
+  const a = appAudio;
+  appAudio = null;
+  a.offPcm();
+  a.offEnded();
+  api.audioStop();
+  a.ctxAudio.close().catch(() => {});
 }
 
 function renderSources() {
@@ -472,7 +582,7 @@ function renderSources() {
     b.className = `source${selectedSource === s.id ? ' selected' : ''}`;
     b.innerHTML = `<img alt="" src="${s.thumb}"><span></span>`;
     b.querySelector('span').textContent = s.name;
-    b.onclick = () => { selectedSource = s.id; $('#screen-go').disabled = false; renderSources(); };
+    b.onclick = () => { selectedSource = s.id; $('#screen-go').disabled = false; renderSources(); fillAudioOptions(); };
     b.ondblclick = () => { selectedSource = s.id; $('#dlg-screen').close('go'); };
     box.append(b);
   }
@@ -484,9 +594,9 @@ function updateQualityHint() {
   $('#screen-hint').textContent = `até ${mbps} Mbps${q.fps === 60 ? ' · mais fluido, bom para jogos' : ''}`;
 }
 
-async function startScreen(sourceId, quality, withAudio) {
+async function startScreen(sourceId, quality, audioChoice) {
   screenQuality = quality;
-  api.selectScreen({ id: sourceId, audio: withAudio });
+  api.selectScreen({ id: sourceId, audio: false });
   const size = {
     width: { ideal: quality.w, max: quality.w },
     height: { ideal: quality.h, max: quality.h },
@@ -495,7 +605,7 @@ async function startScreen(sourceId, quality, withAudio) {
   try {
     screenStream = me.autotestCanvas
       ? testPattern(quality)
-      : await navigator.mediaDevices.getDisplayMedia({ video: size, audio: withAudio });
+      : await navigator.mediaDevices.getDisplayMedia({ video: size, audio: false });
   } catch (err) {
     toast(`Não foi possível capturar a tela: ${err.message}`);
     return;
@@ -508,6 +618,14 @@ async function startScreen(sourceId, quality, withAudio) {
     await vt.applyConstraints(size).catch(() => {});
     const s = vt.getSettings();
     log(`Transmitindo ${quality.label}: captura ${s.width}x${s.height} a ${Math.round(s.frameRate)} fps`);
+  }
+  if (audioChoice) {
+    try {
+      screenStream.addTrack(await startAppAudio(audioChoice));
+      log(`Som da transmissão: ${audioChoice.mode === 'all' ? 'PC todo, menos a Ponte' : audioChoice.name || audioChoice.pid}`);
+    } catch (err) {
+      toast(`A tela vai sem som: ${err.message}`);
+    }
   }
   local.sharing = true;
   local.quality = quality.label;
@@ -549,6 +667,7 @@ function tuneScreenSenders(c, attempt = 0) {
 
 function stopScreen(push = true) {
   if (!screenStream) return;
+  stopAppAudio();
   screenStream.getTracks().forEach((t) => t.stop());
   for (const c of conns.values()) {
     for (const s of c.screenSenders) { try { c.pc.removeTrack(s); } catch {} }
@@ -783,8 +902,20 @@ function renderStage() {
         waiting.className = 'waiting';
         waiting.textContent = 'Conectando à transmissão…';
         el.append(waiting);
-        el.onclick = () => { focusedTile = focusedTile === w.key ? null : w.key; renderStage(); };
-        el.ondblclick = () => { if (document.fullscreenElement) document.exitFullscreen(); else video.requestFullscreen().catch(() => {}); };
+        el.onclick = () => {
+          if (document.fullscreenElement) return;
+          focusedTile = focusedTile === w.key ? null : w.key;
+          renderStage();
+        };
+        const fs = document.createElement('button');
+        fs.type = 'button';
+        fs.className = 'fs-btn';
+        fs.title = 'Tela cheia (Esc para sair)';
+        fs.setAttribute('aria-label', 'Tela cheia');
+        fs.innerHTML = ICON.expand + ICON.shrink;
+        fs.onclick = (e) => { e.stopPropagation(); toggleFullscreen(el); };
+        el.append(fs);
+        el.ondblclick = () => toggleFullscreen(el);
       }
       const label = document.createElement('div');
       label.className = 'label';
@@ -816,6 +947,11 @@ function renderStage() {
     stage.append(el); // garante a ordem
   }
   stage.classList.toggle('has-focus', !!focusedTile);
+}
+
+function toggleFullscreen(el) {
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  else el.requestFullscreen().catch((err) => toast(`Não deu para abrir em tela cheia: ${err.message}`));
 }
 
 // ------------------------------------------------------------------ configurações
@@ -959,12 +1095,12 @@ function bind() {
     if (value !== 'go' || !selectedSource) return;
     const res = Number($('#screen-res').value);
     const fps = Number($('#screen-fps').value);
-    const audio = $('#screen-audio').checked && me.platform === 'win32';
+    const audio = resolveAudioChoice($('#screen-audio-src').value, selectedSource);
     prefs.write('screenRes', res);
     prefs.write('screenFps', fps);
-    prefs.write('screenAudio', audio);
     startScreen(selectedSource, qualityFor(res, fps), audio);
   });
+  $('#screen-audio-src').onchange = () => { audioTouched = true; updateAudioHint(); };
   $('#screen-res').onchange = updateQualityHint;
   $('#screen-fps').onchange = updateQualityHint;
 
@@ -1013,6 +1149,7 @@ function testPattern(q) {
 function autotest() {
   log('autoteste: ativo');
   if (me.autotestDialog === 'settings') setTimeout(openSettings, 3000);
+  if (me.autotestDialog === 'screen') setTimeout(async () => { await openScreenPicker(); document.querySelector('#dlg-screen .tab[data-kind=window]').click(); document.querySelector('#sources .source')?.click(); }, 3000);
   setTimeout(async () => {
     await joinVoice();
     if (me.autotestView === 'chat') setView('chat');
@@ -1024,7 +1161,20 @@ function autotest() {
     if (!chatted && peers.length && !me.demo) { chatted = true; api.sendChat(`olá de ${me.name}`); }
     if (me.autotestShare && local.voice && !sharedOnce && [...conns.values()].some((c) => c.pc.connectionState === 'connected')) {
       sharedOnce = true;
-      startScreen(null, qualityFor(me.autotestRes || 480, me.autotestFps || 30), false);
+      let audio = null;
+      if (me.autotestAudio === 'self') {
+        const t = new AudioContext();
+        const o = t.createOscillator();
+        const g = t.createGain();
+        o.frequency.value = 440;
+        g.gain.value = 0.03;
+        o.connect(g).connect(t.destination);
+        o.start();
+        setTimeout(() => t.close(), 8000);
+        audio = { mode: 'app', pid: me.mainPid, name: 'próprio app (teste)' };
+        if (!local.deafened) toggleDeafen(); // não toca o outro lado: a captura fica só com o tom
+      }
+      startScreen(null, qualityFor(me.autotestRes || 480, me.autotestFps || 30), audio);
     }
     if (me.autotestFocus && !focusedTile) {
       const other = voicePeers().find((p) => p.state.sharing && remotes.get(p.id)?.screen);
@@ -1036,9 +1186,13 @@ function autotest() {
       let audioIn = 0;
       let framesIn = 0;
       let video = '';
+      const audios = [];
       let pair = '';
       stats.forEach((s) => {
-        if (s.type === 'inbound-rtp' && s.kind === 'audio') audioIn += s.bytesReceived || 0;
+        if (s.type === 'inbound-rtp' && s.kind === 'audio') {
+          audioIn += s.bytesReceived || 0;
+          audios.push(`${(s.audioLevel || 0).toFixed(3)}`);
+        }
         if (s.type === 'inbound-rtp' && s.kind === 'video') {
           framesIn += s.framesDecoded || 0;
           video = ` recebendo=${s.frameWidth}x${s.frameHeight}@${s.framesPerSecond || 0}fps`;
@@ -1054,7 +1208,7 @@ function autotest() {
         }
       });
       const name = (peerById(id) || {}).name;
-      log(`autoteste: ${name} estado=${c.pc.connectionState} audioBytes=${audioIn} videoFrames=${framesIn}${video} rota=${pair} chat=${document.querySelectorAll('.msg-text').length}`);
+      log(`autoteste: ${name} estado=${c.pc.connectionState} audioBytes=${audioIn} videoFrames=${framesIn}${video} audios=[${audios.join(',')}] rota=${pair} chat=${document.querySelectorAll('.msg-text').length}`);
     }
   }, 3000);
 }

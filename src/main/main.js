@@ -4,6 +4,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const crypto = require('node:crypto');
+const { spawn, execFile } = require('node:child_process');
 const { LanNode, localInterfaces } = require('./lan');
 
 // Sem isso o Chromium esconde os IPs locais atrás de nomes .local (mDNS),
@@ -111,6 +112,8 @@ function me() {
     autotestFocus: AUTOTEST && process.env.PONTE_AUTOTEST_FOCUS === '1',
     autotestDialog: AUTOTEST ? process.env.PONTE_AUTOTEST_DIALOG || '' : '',
     autotestCanvas: AUTOTEST && process.env.PONTE_AUTOTEST_CANVAS === '1',
+    autotestAudio: AUTOTEST ? process.env.PONTE_AUTOTEST_AUDIO || '' : '',
+    mainPid: process.pid,
     manualHosts: config.manualHosts,
     autotest: AUTOTEST,
     platform: process.platform,
@@ -186,6 +189,16 @@ function createWindow() {
     win.webContents.on('console-message', (event) => {
       console.log(`[ui ${config.name}] ${event.message}`);
     });
+    if (process.env.PONTE_AUTOTEST_FULLSCREEN === '1') {
+      // Clica no botão de tela cheia como se fosse o usuário.
+      setTimeout(async () => {
+        await win.webContents.executeJavaScript("document.querySelector('.tile.screen .fs-btn')?.click()", true);
+        setTimeout(async () => {
+          const ok = await win.webContents.executeJavaScript('!!document.fullscreenElement && document.fullscreenElement.classList.contains("screen")');
+          console.log(`[teste] tela cheia: ${ok ? 'sim' : 'não'} | janela em tela cheia: ${win.isFullScreen()}`);
+        }, 1500);
+      }, 10000);
+    }
     if (process.env.PONTE_SHOT) {
       // Salva uma captura da janela; usado para as imagens do README.
       setTimeout(async () => {
@@ -212,7 +225,6 @@ function setupMedia() {
       const source = (wanted && sources.find((s) => s.id === wanted.id)) || (AUTOTEST ? sources[0] : null);
       if (!source) return callback({});
       const grant = { video: source };
-      if (wanted && wanted.audio && process.platform === 'win32') grant.audio = 'loopback';
       callback(grant);
     } catch (err) {
       console.error('Falha na captura de tela:', err.message);
@@ -299,6 +311,7 @@ app.whenReady().then(async () => {
   if (!Array.isArray(history)) history = [];
   setupMedia();
   setupIpc();
+  setupAppAudio();
   try {
     await startNetwork();
   } catch (err) {
@@ -311,7 +324,78 @@ app.on('second-instance', () => {
   if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
 });
 
+// ------------------------------------------------------------------ som por aplicativo
+// O Electron só captura o som do sistema inteiro. Para mandar só o som do
+// jogo (sem a voz do Discord, evitando retorno), usamos o auxiliar nativo
+// native/ponte-audio.exe, que usa a captura por processo do Windows.
+let audioProc = null;
+
+function audioHelper() {
+  if (process.platform !== 'win32') return null;
+  const file = app.isPackaged
+    ? path.join(process.resourcesPath, 'ponte-audio.exe')
+    : path.join(__dirname, '..', '..', 'native', 'bin', 'ponte-audio.exe');
+  return fs.existsSync(file) ? file : null;
+}
+
+function stopAppAudio() {
+  if (audioProc) {
+    const p = audioProc;
+    audioProc = null;
+    p.kill();
+  }
+}
+
+function setupAppAudio() {
+  ipcMain.handle('audio:apps', async () => {
+    const exe = audioHelper();
+    if (!exe) return null;
+    const out = await new Promise((resolve) => {
+      execFile(exe, ['windows'], { windowsHide: true, maxBuffer: 1 << 20, encoding: 'utf8' },
+        (err, stdout) => resolve(err ? '' : stdout));
+    });
+    return out.split(/\r?\n/)
+      .map((line) => { try { return JSON.parse(line); } catch { return null; } })
+      .filter((w) => w && w.pid && w.pid !== process.pid)
+      .map((w) => ({ hwnd: String(w.hwnd), pid: w.pid, exe: String(w.exe || ''), title: String(w.title || '').slice(0, 120) }));
+  });
+
+  ipcMain.handle('audio:start', (_e, choice) => {
+    stopAppAudio();
+    const exe = audioHelper();
+    if (!exe) throw new Error('Este Windows não permite capturar o som de um app só.');
+    const all = choice && choice.mode === 'all';
+    // "Tudo do PC" exclui a própria Ponte (e o serviço de áudio dela), para
+    // a voz da sala não voltar para quem está falando.
+    const target = all ? process.pid : Number(choice && choice.pid);
+    if (!Number.isInteger(target) || target <= 0) throw new Error('App inválido');
+    const proc = spawn(exe, ['capture', String(target), all ? 'exclude' : 'include'], {
+      windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    audioProc = proc;
+    let pending = null;
+    proc.stdout.on('data', (chunk) => {
+      pending = pending ? Buffer.concat([pending, chunk]) : chunk;
+      const usable = pending.length - (pending.length % 4); // quadros inteiros (2 canais x 16 bits)
+      if (!usable) return;
+      send('audio:pcm', pending.subarray(0, usable));
+      pending = usable === pending.length ? null : pending.subarray(usable);
+    });
+    proc.stderr.on('data', (d) => console.error(String(d).trim()));
+    proc.on('exit', (code) => {
+      if (audioProc === proc) {
+        audioProc = null;
+        send('audio:ended', code);
+      }
+    });
+    return true;
+  });
+
+  ipcMain.on('audio:stop', stopAppAudio);
+}
+
 app.on('window-all-closed', () => {
+  stopAppAudio();
   if (node) node.stop();
   app.quit();
 });
