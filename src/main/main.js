@@ -1,17 +1,24 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, session, desktopCapturer, shell, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, session, desktopCapturer, shell, Notification, protocol } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const crypto = require('node:crypto');
 const { spawn, execFile } = require('node:child_process');
 const { LanNode, localInterfaces } = require('./lan');
+const { MediaStore, cleanFile } = require('./media');
 const updater = require('./updater');
 const { createTray } = require('./tray');
 
 // Sem isso o Chromium esconde os IPs locais atrás de nomes .local (mDNS),
 // o que costuma falhar dentro do Radmin VPN.
 app.commandLine.appendSwitch('disable-features', 'WebRtcHideLocalIpsWithMdns');
+
+// Imagens e vídeos do chat são servidos por ponte-media://file/<id>.
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'ponte-media', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+]);
+let media = null;
 
 const AUTOTEST = process.env.PONTE_AUTOTEST === '1';
 const DEMO = process.env.PONTE_DEMO === '1';
@@ -75,14 +82,17 @@ function addMessages(msgs) {
   const fresh = [];
   for (const m of msgs) {
     if (!m || typeof m.id !== 'string' || known.has(m.id)) continue;
-    if (typeof m.text !== 'string' || !m.text.trim()) continue;
+    const file = m.file ? cleanFile(m.file) : null;
+    const text = typeof m.text === 'string' ? m.text.slice(0, 4000) : '';
+    if (!text.trim() && !file) continue;
     const clean = {
       id: m.id,
       from: String(m.from || ''),
       name: String(m.name || 'Sem nome').slice(0, 40),
-      text: m.text.slice(0, 4000),
+      text,
       ts: Number(m.ts) || Date.now(),
     };
+    if (file) clean.file = file;
     history.push(clean);
     known.add(clean.id);
     fresh.push(clean);
@@ -94,6 +104,10 @@ function addMessages(msgs) {
   }
   return fresh;
 }
+
+/** Para a interface: diz se o anexo já está neste computador. */
+const decorate = (m) => (m.file ? { ...m, file: { ...m.file, local: !!media && media.has(m.file.id) } } : m);
+const preview = (m) => (m.file ? `${m.file.mime.startsWith('video/') ? '🎬 Vídeo' : '📷 Imagem'}${m.text ? ` · ${m.text}` : ''}` : m.text);
 
 const send = (channel, payload) => {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -117,6 +131,7 @@ function me() {
     autotestFocus: AUTOTEST && process.env.PONTE_AUTOTEST_FOCUS === '1',
     autotestDialog: AUTOTEST ? process.env.PONTE_AUTOTEST_DIALOG || '' : '',
     autotestCanvas: AUTOTEST && process.env.PONTE_AUTOTEST_CANVAS === '1',
+    autotestMedia: AUTOTEST ? process.env.PONTE_AUTOTEST_MEDIA || '' : '',
     autotestAudio: AUTOTEST ? process.env.PONTE_AUTOTEST_AUDIO || '' : '',
     mainPid: process.pid,
     manualHosts: config.manualHosts,
@@ -146,18 +161,31 @@ async function startNetwork() {
     // Sincroniza o histórico com quem acabou de chegar.
     node.sendTo(peerId, { t: 'history', msgs: history.slice(-100) });
   });
+  media = new MediaStore(userFile('media'), node);
+  media.on('progress', (p) => send('media:progress', p));
+  media.on('ready', (id) => send('media:ready', { id }));
+  media.on('log', (line) => console.log(`[arquivos] ${line}`));
+  node.on('peers', () => media.dropFrom(new Set(node.listPeers().map((p) => p.id))));
+  // Anexos que ainda não temos são pedidos para quem mandou a mensagem.
+  const fetchMissing = (peerId, msgs) => {
+    for (const m of msgs) if (m.file && !media.has(m.file.id)) media.request(peerId, m.file.id);
+  };
   node.on('message', (peerId, msg) => {
+    if (media.handle(peerId, msg)) return;
     if (msg.t === 'chat') {
       const fresh = addMessages([{ ...msg.msg, from: peerId }]);
+      fetchMissing(peerId, fresh);
       for (const m of fresh) {
-        send('chat', m);
+        send('chat', decorate(m));
         if (win && !win.isFocused()) {
           win.flashFrame(true);
-          notify(m.name, m.text.slice(0, 120), showWindow);
+          notify(m.name, preview(m).slice(0, 120), showWindow);
         }
       }
     } else if (msg.t === 'history' && Array.isArray(msg.msgs)) {
-      for (const m of addMessages(msg.msgs.slice(-100))) send('chat', m);
+      const fresh = addMessages(msg.msgs.slice(-100));
+      fetchMissing(peerId, fresh);
+      for (const m of fresh) send('chat', decorate(m));
     } else if (msg.t === 'signal') {
       send('signal', { from: peerId, data: msg.data });
     }
@@ -168,10 +196,10 @@ async function startNetwork() {
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    minWidth: 960,
-    minHeight: 560,
+    width: Number((process.env.PONTE_WINDOW_SIZE || '').split('x')[0]) || 1280,
+    height: Number((process.env.PONTE_WINDOW_SIZE || '').split('x')[1]) || 800,
+    minWidth: 720,
+    minHeight: 500,
     backgroundColor: '#000000',
     // Barra de título integrada: só os botões do Windows ficam no canto.
     titleBarStyle: 'hidden',
@@ -190,7 +218,10 @@ function createWindow() {
     },
   });
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
-  if (process.env.PONTE_SHOT) win.setContentSize(1280, 800);
+  if (process.env.PONTE_SHOT) {
+    const [w, h] = (process.env.PONTE_WINDOW_SIZE || '1280x800').split('x').map(Number);
+    win.setContentSize(w || 1280, h || 800);
+  }
   win.on('focus', () => win.flashFrame(false));
   // Fechar só esconde: a Ponte continua na bandeja (voz, chat e transmissão seguem).
   win.on('close', (e) => {
@@ -257,7 +288,21 @@ function setupMedia() {
 }
 
 function setupIpc() {
-  ipcMain.handle('init', () => ({ me: me(), peers: node.listPeers(), history }));
+  ipcMain.handle('init', () => ({ me: me(), peers: node.listPeers(), history: history.map(decorate) }));
+
+  ipcMain.handle('media:send', async (_e, req) => {
+    const meta = await media.import({
+      srcPath: req && typeof req.path === 'string' && req.path ? req.path : null,
+      bytes: req && req.bytes ? req.bytes : null,
+      name: req && req.name,
+      mime: req && req.mime,
+    });
+    const text = String((req && req.text) || '').trim().slice(0, 4000);
+    const msg = { id: crypto.randomUUID(), from: config.id, name: config.name, text, ts: Date.now(), file: meta };
+    addMessages([msg]);
+    node.broadcast({ t: 'chat', msg }); // quem recebe pede o arquivo (file-get)
+    return decorate(msg);
+  });
 
   ipcMain.handle('chat:send', (_e, text) => {
     text = String(text || '').trim().slice(0, 4000);
@@ -423,6 +468,7 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.error('Falha ao iniciar a rede:', err);
   }
+  if (media) protocol.handle('ponte-media', (req) => media.respond(req));
   createWindow();
   updater.closeSplash();
   setupTray();

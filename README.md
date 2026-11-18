@@ -39,7 +39,8 @@ Sem servidor, sem conta, sem configurar nada.
 ## Converse.
 
 O canal **#geral** guarda o histórico nos computadores de vocês.<br>
-Quem chega depois recebe o que perdeu assim que entra.
+Quem chega depois recebe o que perdeu assim que entra.<br>
+Mande **imagens e vídeos** de até 500 MB: pelo **+**, arrastando para a conversa ou com Ctrl+V.
 
 </div>
 
@@ -62,7 +63,8 @@ e um anel verde em volta de quem está falando.
 
 Escolha uma tela ou só a janela do jogo, em **480p, 720p ou 1080p**, a **30 ou 60 fps**.<br>
 A Ponte manda **só o som daquele app**: a voz do Discord não volta para ninguém.<br>
-Todo mundo pode transmitir ao mesmo tempo. Clique numa tela para ampliar, ou dê dois cliques para tela cheia.
+Todo mundo pode transmitir ao mesmo tempo. Clique numa tela para ampliar, ou dê dois cliques para tela cheia.<br>
+Quem assiste ajusta **o volume da transmissão** separado da voz, e os controles somem quando o mouse para.
 
 </div>
 
@@ -95,7 +97,8 @@ baixa, instala e reabre sozinha. Com o app aberto, ela confere de novo a cada 30
 ## Do seu jeito.
 
 Troque o nome, o microfone e a saída de som, adicione o IP de um amigo<br>
-e ligue ou desligue o efeito **Liquid Glass**.
+e ligue ou desligue o efeito **Liquid Glass** e o fundo animado.<br>
+A janela se adapta a qualquer tamanho, do canto da tela ao monitor inteiro.
 
 </div>
 

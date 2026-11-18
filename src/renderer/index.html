@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; media-src 'self' blob: mediastream:;" />
+        content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data: ponte-media:; media-src 'self' blob: mediastream: ponte-media:;" />
   <title>Ponte</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="ambient" aria-hidden="true"><i></i><i></i><i></i></div>
+  <div class="ambient" aria-hidden="true"><span class="orbit o1"><i></i></span><span class="orbit o2 rev"><i></i></span><span class="orbit o3"><i></i></span><span class="orbit o4 rev"><i></i></span></div>
   <div class="titlebar" aria-hidden="true"></div>
 
   <div id="app">
@@ -79,13 +79,26 @@
     <!-- Conteúdo -->
     <main class="main">
       <header class="large-title">
-        <h2 id="view-title">Conversa</h2>
-        <p id="view-sub"></p>
+        <div class="title-text">
+          <h2 id="view-title">Conversa</h2>
+          <p id="view-sub"></p>
+        </div>
+        <button class="pill-btn members-btn" id="btn-members" title="Quem está online" aria-label="Quem está online" aria-controls="members-panel" aria-expanded="false">
+          <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/></svg>
+          <span id="members-btn-count">1</span>
+        </button>
       </header>
 
       <section class="view" id="view-chat">
         <div class="messages" id="messages"></div>
+        <div class="drop-hint" id="drop-hint" hidden>
+          <div><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg><strong>Solte para enviar</strong><small>Imagens e vídeos de até 500 MB</small></div>
+        </div>
         <form class="composer glass" id="composer" data-liquid="26">
+          <button type="button" class="attach" id="btn-attach" title="Enviar imagem ou vídeo" aria-label="Enviar imagem ou vídeo">
+            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <input type="file" id="file-input" accept="image/*,video/*" multiple hidden />
           <textarea id="composer-input" rows="1" placeholder="Mensagem" maxlength="4000" aria-label="Mensagem"></textarea>
           <button type="submit" class="send" title="Enviar" aria-label="Enviar">
             <svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
@@ -124,7 +137,7 @@
     </main>
 
     <!-- Online -->
-    <aside class="members">
+    <aside class="members" id="members-panel">
       <h2 class="section-title">Online <span class="count" id="online-count">1</span></h2>
       <ul class="member-list card-list" id="member-list"></ul>
       <div class="searching" id="searching">
@@ -184,6 +197,11 @@
         </label>
 
         <label class="switch-row">
+          <span>Fundo animado</span>
+          <input type="checkbox" role="switch" id="set-motion" checked />
+        </label>
+
+        <label class="switch-row">
           <span>Sons de entrada, saída e mensagem</span>
           <input type="checkbox" role="switch" id="set-sounds" checked />
         </label>
@@ -210,6 +228,12 @@
         <button class="pill-btn primary large" id="set-save" value="save">Salvar</button>
       </footer>
     </form>
+  </dialog>
+
+  <!-- Imagem ampliada -->
+  <dialog id="dlg-media" class="lightbox" closedby="any" aria-label="Imagem">
+    <form method="dialog"><button class="circle-btn lb-close" value="close" aria-label="Fechar"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></form>
+    <img id="lightbox-img" alt="" />
   </dialog>
 
   <!-- Escolha de tela -->

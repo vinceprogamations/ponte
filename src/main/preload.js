@@ -1,5 +1,5 @@
 'use strict';
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const on = (channel) => (fn) => {
   const handler = (_e, payload) => fn(payload);
@@ -22,6 +22,10 @@ contextBridge.exposeInMainWorld('ponte', {
   audioStop: () => ipcRenderer.send('audio:stop'),
   onAudioPcm: on('audio:pcm'),
   onAudioEnded: on('audio:ended'),
+  sendMedia: (req) => ipcRenderer.invoke('media:send', req),
+  pathForFile: (file) => { try { return webUtils.getPathForFile(file) || ''; } catch { return ''; } },
+  onMediaProgress: on('media:progress'),
+  onMediaReady: on('media:ready'),
   log: (line) => ipcRenderer.send('log', String(line)),
   onPeers: on('peers'),
   onChat: on('chat'),

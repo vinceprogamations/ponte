@@ -87,6 +87,10 @@ const ICON = {
   deaf: '<svg viewBox="0 0 24 24"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/><path d="M4 4l16 16"/></svg>',
   voice: '<svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>',
   screen: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>',
+  photo: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg>',
+  film: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3z"/></svg>',
+  speaker: '<svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>',
+  speakerOff: '<svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="m16 9 6 6M22 9l-6 6"/></svg>',
   expand: '<svg class="expand" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
   shrink: '<svg class="shrink" viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>',
 };
@@ -342,20 +346,21 @@ function onRemoteTrack(id, track, stream) {
     };
     track.onended = refresh;
     stream.onremovetrack = refresh;
+    applyVolumes();
     renderStage();
+    wakeUi();
     return;
   }
   if (r.audios.has(stream.id)) return;
   const el = new Audio();
   el.autoplay = true;
   el.srcObject = stream;
-  el.muted = local.deafened;
-  el.volume = volumeFor(id);
   const sink = prefs.read('outDevice', '');
   if (sink && el.setSinkId) el.setSinkId(sink).catch(() => {});
   el.play().catch(() => {});
   document.body.append(el);
   r.audios.set(stream.id, el);
+  applyVolumes();
   // Áudio que vem junto com vídeo é som da tela; o resto é microfone.
   const isScreenAudio = stream.getVideoTracks().length > 0;
   if (!isScreenAudio) attachMeter(id, stream);
@@ -371,8 +376,31 @@ function onRemoteTrack(id, track, stream) {
 function volumeFor(id) { return prefs.read(`vol:${id}`, 1); }
 function setVolume(id, v) {
   prefs.write(`vol:${id}`, v);
-  const r = remotes.get(id);
-  if (r) for (const el of r.audios.values()) el.volume = v;
+  applyVolumes();
+}
+const streamVolume = (id) => prefs.read(`svol:${id}`, 1);
+const streamMuted = (id) => prefs.read(`smute:${id}`, false);
+function setStreamVolume(id, v) {
+  prefs.write(`svol:${id}`, v);
+  if (v > 0) prefs.write(`smute:${id}`, false);
+  applyVolumes();
+  renderStage();
+}
+function toggleStreamMute(id) {
+  prefs.write(`smute:${id}`, !streamMuted(id));
+  applyVolumes();
+  renderStage();
+}
+/** Áudio que vem junto com vídeo é o som da transmissão; o resto é a voz. */
+const isStreamAudio = (el) => !!(el.srcObject && el.srcObject.getVideoTracks().length);
+function applyVolumes() {
+  for (const [id, r] of remotes) {
+    for (const el of r.audios.values()) {
+      const stream = isStreamAudio(el);
+      el.volume = stream ? streamVolume(id) : volumeFor(id);
+      el.muted = local.deafened || (stream && streamMuted(id));
+    }
+  }
 }
 
 // ------------------------------------------------------------------ voz
@@ -427,7 +455,7 @@ function leaveVoice() {
 
 function applyMute() {
   if (micStream) for (const t of micStream.getAudioTracks()) t.enabled = !(local.muted || local.deafened);
-  for (const r of remotes.values()) for (const el of r.audios.values()) el.muted = local.deafened;
+  applyVolumes();
 }
 
 function toggleMute() {
@@ -697,7 +725,7 @@ function appendMessage(m, { quiet = false } = {}) {
   if (sameAuthor) {
     const line = document.createElement('div');
     line.className = `msg-line${m.from === me.id ? ' mine' : ''}`;
-    line.innerHTML = `<div class="msg-text">${linkify(m.text)}</div>`;
+    line.append(...msgBody(m));
     line.title = time.toLocaleString();
     box.append(line);
   } else {
@@ -713,10 +741,7 @@ function appendMessage(m, { quiet = false } = {}) {
     head.querySelector('time').textContent = today
       ? `Hoje às ${time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
       : time.toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
-    const text = document.createElement('div');
-    text.className = 'msg-text';
-    text.innerHTML = linkify(m.text);
-    g.append(head, text);
+    g.append(head, ...msgBody(m));
     box.append(g);
   }
   lastMsg = m;
@@ -725,6 +750,159 @@ function appendMessage(m, { quiet = false } = {}) {
     if (view !== 'chat' || !document.hasFocus()) { unread += 1; renderUnread(); }
     sound('message');
   }
+}
+
+// ------------------------------------------------------------------ imagens e vídeos
+const MAX_FILE = 500 * 1024 * 1024;
+const fileMeta = new Map(); // id -> anexo (com .local)
+
+function msgBody(m) {
+  const parts = [];
+  if (m.file) parts.push(mediaEl(m.file));
+  if (m.text) {
+    const text = document.createElement('div');
+    text.className = 'msg-text';
+    text.innerHTML = linkify(m.text);
+    parts.push(text);
+  }
+  return parts;
+}
+
+const fmtSize = (n) => (n >= 1048576 ? `${(n / 1048576).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+
+function mediaEl(f) {
+  fileMeta.set(f.id, { ...(fileMeta.get(f.id) || {}), ...f });
+  const box = document.createElement('div');
+  box.className = 'msg-media';
+  box.dataset.fileId = f.id;
+  fillMedia(box);
+  return box;
+}
+
+function keepBottom(fn) {
+  const list = $('#messages');
+  const near = list.scrollHeight - list.scrollTop - list.clientHeight < 160;
+  fn();
+  if (near) list.scrollTop = list.scrollHeight;
+}
+
+function fillMedia(box) {
+  const f = fileMeta.get(box.dataset.fileId);
+  const video = f.mime.startsWith('video/');
+  box.innerHTML = '';
+  box.classList.toggle('pending', !f.local);
+  if (!f.local) {
+    box.innerHTML = '<div class="media-wait"><span class="media-icon"></span><div class="media-info"><strong></strong><small></small><div class="bar"><i></i></div></div></div>';
+    box.querySelector('.media-icon').innerHTML = video ? ICON.film : ICON.photo;
+    box.querySelector('strong').textContent = f.name;
+    box.querySelector('small').textContent = `Recebendo ${video ? 'vídeo' : 'imagem'} · ${fmtSize(f.size)}`;
+    return;
+  }
+  const src = `ponte-media://file/${f.id}`;
+  if (video) {
+    const v = document.createElement('video');
+    v.src = src;
+    v.controls = true;
+    v.preload = 'metadata';
+    v.playsInline = true;
+    v.onloadedmetadata = () => keepBottom(() => {});
+    box.append(v);
+  } else {
+    const img = new Image();
+    img.alt = f.name;
+    img.title = 'Clique para ampliar';
+    img.onload = () => keepBottom(() => {});
+    img.onclick = () => openLightbox(src, f.name);
+    img.src = src;
+    box.append(img);
+  }
+  const up = document.createElement('div');
+  up.className = 'media-up';
+  up.hidden = true;
+  box.append(up);
+}
+
+function onMediaReady({ id }) {
+  const f = fileMeta.get(id);
+  if (!f) return;
+  f.local = true;
+  keepBottom(() => document.querySelectorAll(`.msg-media[data-file-id="${id}"]`).forEach(fillMedia));
+}
+
+function onMediaProgress({ id, done, size, dir }) {
+  const pct = Math.min(100, Math.round((done / size) * 100));
+  document.querySelectorAll(`.msg-media[data-file-id="${id}"]`).forEach((box) => {
+    if (dir === 'down') {
+      const bar = box.querySelector('.bar i');
+      if (bar) bar.style.width = `${pct}%`;
+      const small = box.querySelector('small');
+      if (small) small.textContent = `Recebendo · ${pct}% de ${fmtSize(size)}`;
+    } else {
+      const up = box.querySelector('.media-up');
+      if (!up) return;
+      up.hidden = pct >= 100;
+      up.textContent = `Enviando ${pct}%`;
+    }
+  });
+}
+
+function openLightbox(src, name) {
+  const img = $('#lightbox-img');
+  img.src = src;
+  img.alt = name;
+  $('#dlg-media').showModal();
+}
+
+async function sendFiles(list) {
+  for (const file of list) {
+    const okType = /^(image|video)\//.test(file.type) || /\.(png|jpe?g|gif|webp|bmp|avif|mp4|m4v|webm|mov|mkv|ogv)$/i.test(file.name);
+    if (!okType) { toast('Só dá para enviar imagens e vídeos.'); continue; }
+    if (file.size > MAX_FILE) { toast(`${file.name} passa de 500 MB.`); continue; }
+    const req = { name: file.name, mime: file.type, path: api.pathForFile(file) };
+    if (!req.path) {
+      // Imagem colada (Ctrl+V) não tem arquivo no disco: manda os bytes.
+      if (file.size > 50 * 1024 * 1024) { toast('Arquivo colado muito grande; envie pelo botão +.'); continue; }
+      req.bytes = new Uint8Array(await file.arrayBuffer());
+      if (!req.name) req.name = `imagem-${Date.now()}.png`;
+    }
+    try {
+      const m = await api.sendMedia(req);
+      if (m) appendMessage(m);
+    } catch (err) {
+      toast(`Não deu para enviar: ${String(err.message || err).replace(/^.*Error: /, '')}`);
+    }
+  }
+}
+
+function bindFiles() {
+  const input = $('#file-input');
+  $('#btn-attach').onclick = () => input.click();
+  input.onchange = () => { sendFiles([...input.files]); input.value = ''; };
+  $('#composer-input').addEventListener('paste', (e) => {
+    const files = [...(e.clipboardData?.files || [])];
+    if (files.length) { e.preventDefault(); sendFiles(files); }
+  });
+  // Arrastar e soltar na conversa
+  const chat = $('#view-chat');
+  const hint = $('#drop-hint');
+  let depth = 0;
+  const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+  chat.addEventListener('dragenter', (e) => { if (!hasFiles(e)) return; depth += 1; hint.hidden = false; });
+  chat.addEventListener('dragleave', () => { depth = Math.max(0, depth - 1); if (!depth) hint.hidden = true; });
+  chat.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
+  chat.addEventListener('drop', (e) => {
+    e.preventDefault();
+    depth = 0;
+    hint.hidden = true;
+    sendFiles([...(e.dataTransfer?.files || [])]);
+  });
+  // Soltar fora da conversa não pode abrir o arquivo na janela
+  window.addEventListener('dragover', (e) => e.preventDefault());
+  window.addEventListener('drop', (e) => e.preventDefault());
+  $('#dlg-media').addEventListener('click', (e) => { if (e.target.id === 'lightbox-img') $('#dlg-media').close(); });
+  $('#dlg-media').addEventListener('close', () => { $('#lightbox-img').removeAttribute('src'); });
+  api.onMediaReady(onMediaReady);
+  api.onMediaProgress(onMediaProgress);
 }
 
 function renderHistory(list) {
@@ -775,6 +953,7 @@ function setView(v) {
     setTimeout(() => $('#composer-input').focus(), 0);
   } else {
     $('#view-title').textContent = 'Sala de voz';
+    wakeUi();
     $('#view-sub').textContent = 'Áudio e vídeo vão direto de um computador para o outro';
   }
   render();
@@ -852,6 +1031,7 @@ function render() {
     ml.append(li);
   }
   $('#online-count').textContent = String(all.length);
+  $('#members-btn-count').textContent = String(all.length);
   $('#searching').hidden = peers.length > 0;
 
   document.querySelectorAll('[data-speak]').forEach((el) => el.classList.toggle('speaking', speaking.has(el.dataset.speak)));
@@ -919,6 +1099,17 @@ function renderStage() {
         fs.innerHTML = ICON.expand + ICON.shrink;
         fs.onclick = (e) => { e.stopPropagation(); toggleFullscreen(el); };
         el.append(fs);
+        if (!w.mine) {
+          const sv = document.createElement('div');
+          sv.className = 'svol';
+          sv.innerHTML = '<button type="button" class="svol-btn"></button><input type="range" min="0" max="1" step="0.05" aria-label="Volume da transmissão">';
+          const btn = sv.querySelector('button');
+          const range = sv.querySelector('input');
+          btn.onclick = () => toggleStreamMute(w.id);
+          range.oninput = () => setStreamVolume(w.id, Number(range.value));
+          for (const ev of ['click', 'dblclick', 'pointerdown']) sv.addEventListener(ev, (e) => e.stopPropagation());
+          el.append(sv);
+        }
         el.ondblclick = () => toggleFullscreen(el);
       }
       const label = document.createElement('div');
@@ -945,12 +1136,40 @@ function renderStage() {
       const video = el.querySelector('video');
       if (video.srcObject !== (w.stream || null)) video.srcObject = w.stream || null;
       el.querySelector('.waiting').hidden = !!w.stream;
+      const sv = el.querySelector('.svol');
+      if (sv) {
+        const hasAudio = !!(w.stream && w.stream.getAudioTracks().length);
+        const muted = streamMuted(w.id) || streamVolume(w.id) === 0;
+        sv.classList.toggle('no-audio', !hasAudio);
+        const btn = sv.querySelector('button');
+        btn.innerHTML = muted || !hasAudio ? ICON.speakerOff : ICON.speaker;
+        btn.title = !hasAudio ? 'Esta transmissão não tem som' : (muted ? 'Ativar som da transmissão' : 'Silenciar transmissão');
+        btn.disabled = !hasAudio;
+        const range = sv.querySelector('input');
+        range.disabled = !hasAudio;
+        if (document.activeElement !== range) range.value = String(streamMuted(w.id) ? 0 : streamVolume(w.id));
+        range.title = `Volume da transmissão: ${Math.round(Number(range.value) * 100)}%`;
+      }
       video.hidden = !w.stream;
       el.classList.toggle('focused', focusedTile === w.key);
     }
     stage.append(el); // garante a ordem
   }
   stage.classList.toggle('has-focus', !!focusedTile);
+  stage.classList.toggle('one-screen', !focusedTile && wanted.filter((w) => w.kind === 'screen').length === 1);
+}
+
+// Com o mouse parado por 2,5 s, os controles da sala somem (como no Discord).
+let idleTimer = null;
+function wakeUi() {
+  const view = $('#view-voice');
+  view.classList.remove('idle');
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    // Não some enquanto o mouse estiver em cima de um controle.
+    if (view.querySelector('.controls:hover, .svol:hover, .fs-btn:hover, .vol:hover')) wakeUi();
+    else view.classList.add('idle');
+  }, 2500);
 }
 
 function toggleFullscreen(el) {
@@ -1004,6 +1223,7 @@ async function openSettings() {
   $('#set-name').value = me.name;
   $('#set-sounds').checked = prefs.read('sounds', true);
   $('#set-glass').checked = prefs.read('glass', true);
+  $('#set-motion').checked = prefs.read('motion', true);
   renderIps();
   $('#set-log').textContent = logLines.slice(-60).join('\n') || 'Sem eventos ainda.';
   try {
@@ -1068,6 +1288,7 @@ async function saveSettings() {
   if (name && name !== me.name) me = { ...me, ...(await api.setName(name)) };
   prefs.write('sounds', $('#set-sounds').checked);
   prefs.write('glass', $('#set-glass').checked);
+  prefs.write('motion', $('#set-motion').checked);
   applyGlass();
   const out = $('#set-out').value;
   prefs.write('outDevice', out);
@@ -1099,6 +1320,7 @@ async function switchMic() {
 
 function applyGlass() {
   document.documentElement.classList.toggle('no-glass', !prefs.read('glass', true));
+  document.documentElement.classList.toggle('no-motion', !prefs.read('motion', true));
 }
 
 // ------------------------------------------------------------------ eventos
@@ -1164,8 +1386,21 @@ function bind() {
     if (e.ctrlKey && e.shiftKey && e.code === 'KeyM') { e.preventDefault(); toggleMute(); }
     if (e.ctrlKey && e.shiftKey && e.code === 'KeyD') { e.preventDefault(); toggleDeafen(); }
   });
+  for (const ev of ['pointermove', 'pointerdown', 'wheel', 'keydown']) document.addEventListener(ev, wakeUi, { passive: true });
+  document.addEventListener('fullscreenchange', wakeUi);
   window.addEventListener('beforeunload', () => { if (local.voice) api.setState({ voice: false, sharing: false }); });
 
+  bindFiles();
+  // Janela estreita: a lista "Online" vira um painel que abre pelo botão.
+  const setMembers = (open) => {
+    document.body.classList.toggle('members-open', open);
+    $('#btn-members').setAttribute('aria-expanded', String(open));
+  };
+  $('#btn-members').onclick = (e) => { e.stopPropagation(); setMembers(!document.body.classList.contains('members-open')); };
+  document.addEventListener('click', (e) => {
+    if (document.body.classList.contains('members-open') && !e.target.closest('#members-panel')) setMembers(false);
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMembers(false); });
   api.onPeers(onPeers);
   api.onChat((m) => appendMessage(m));
   api.onSignal(onSignal);
@@ -1197,7 +1432,49 @@ function testPattern(q) {
   return canvas.captureStream(q.fps);
 }
 
+/** Autoteste: manda uma imagem, um vídeo curto e (opcional) um arquivo do disco. */
+async function autotestMedia() {
+  const c = document.createElement('canvas');
+  c.width = 640; c.height = 360;
+  const g = c.getContext('2d');
+  const paint = (t) => {
+    g.fillStyle = `hsl(${t % 360} 70% 45%)`; g.fillRect(0, 0, 640, 360);
+    g.fillStyle = '#fff'; g.font = 'bold 64px sans-serif'; g.fillText(`Ponte ${t}`, 40, 200);
+  };
+  paint(200);
+  const png = await new Promise((r) => c.toBlob(r, 'image/png'));
+  await sendFiles([new File([png], 'teste.png', { type: 'image/png' })]);
+  const rec = new MediaRecorder(c.captureStream(30), { mimeType: 'video/webm' });
+  const parts = [];
+  rec.ondataavailable = (e) => parts.push(e.data);
+  let t = 0;
+  const timer = setInterval(() => paint((t += 6)), 33);
+  rec.start();
+  await new Promise((r) => setTimeout(r, 2000));
+  await new Promise((r) => { rec.onstop = r; rec.stop(); });
+  clearInterval(timer);
+  await sendFiles([new File(parts, 'teste.webm', { type: 'video/webm' })]);
+  const big = me.autotestMedia.startsWith('path:') ? me.autotestMedia.slice(5) : '';
+  if (big) {
+    const m = await api.sendMedia({ path: big, name: 'grande.mp4', mime: 'video/mp4' });
+    if (m) appendMessage(m);
+  }
+  log('autoteste: arquivos enviados');
+}
+
 function autotest() {
+  if (me.autotestMedia) {
+    api.onMediaReady(({ id }) => {
+      const f = fileMeta.get(id);
+      log(`autoteste: arquivo recebido ${f ? f.name : id}`);
+      setTimeout(() => {
+        const el = document.querySelector(`.msg-media[data-file-id="${id}"] img, .msg-media[data-file-id="${id}"] video`);
+        if (!el) return log('autoteste: sem elemento de mídia');
+        if (el.tagName === 'IMG') log(`autoteste: imagem ${el.naturalWidth}x${el.naturalHeight}`);
+        else log(`autoteste: vídeo readyState=${el.readyState} ${el.videoWidth}x${el.videoHeight} erro=${el.error ? el.error.code : 'nenhum'}`);
+      }, 1500);
+    });
+  }
   log('autoteste: ativo');
   if (me.autotestDialog === 'settings') {
     setTimeout(async () => { await openSettings(); if (me.demo) document.activeElement?.blur(); }, 3000);
@@ -1217,9 +1494,14 @@ function autotest() {
   }, 1500);
   let sharedOnce = false;
   let glassLogged = false;
+  let checkedVolume = false;
   let chatted = false;
   setInterval(async () => {
-    if (!chatted && peers.length && !me.demo) { chatted = true; api.sendChat(`olá de ${me.name}`); }
+    if (!chatted && peers.length && !me.demo) {
+      chatted = true;
+      api.sendChat(`olá de ${me.name}`);
+      if (me.autotestMedia && me.autotestMedia !== 'recv') autotestMedia();
+    }
     if (me.autotestShare && local.voice && !sharedOnce && [...conns.values()].some((c) => c.pc.connectionState === 'connected')) {
       sharedOnce = true;
       let audio = null;
@@ -1240,6 +1522,18 @@ function autotest() {
     if (me.autotestFocus && !focusedTile) {
       const other = voicePeers().find((p) => p.state.sharing && remotes.get(p.id)?.screen);
       if (other) { focusedTile = `screen:${other.id}`; renderStage(); }
+    }
+    if (me.autotestAudio === 'check' && !checkedVolume) {
+      const sharer = voicePeers().find((p) => p.state.sharing && remotes.get(p.id)?.screen?.getAudioTracks().length);
+      if (sharer) {
+        checkedVolume = true;
+        setStreamVolume(sharer.id, 0.3);
+        const els = [...remotes.get(sharer.id).audios.values()];
+        log(`autoteste: volumes stream=${els.filter(isStreamAudio).map((e) => e.volume).join(',')} voz=${els.filter((e) => !isStreamAudio(e)).map((e) => e.volume).join(',')} svol=${document.querySelectorAll('.svol').length}`);
+        toggleStreamMute(sharer.id);
+        log(`autoteste: mudo stream=${els.filter(isStreamAudio).map((e) => e.muted).join(',')} voz=${els.filter((e) => !isStreamAudio(e)).map((e) => e.muted).join(',')}`);
+        setTimeout(() => log(`autoteste: controles escondidos=${$('#view-voice').classList.contains('idle')} opacidade=${getComputedStyle($('#controls')).opacity}`), 4000);
+      }
     }
     if (!glassLogged) { glassLogged = true; log(`vidro: ${document.querySelectorAll('.liquid-on').length} painéis com refração; filtro=${getComputedStyle($('#composer')).backdropFilter}`); }
     for (const [id, c] of conns) {

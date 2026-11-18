@@ -128,6 +128,29 @@ class LanNode extends EventEmitter {
     return true;
   }
 
+  /**
+   * Como sendTo, mas espera o buffer do socket esvaziar quando ele enche.
+   * Usado para arquivos grandes, para não acumular tudo na memória e deixar
+   * as mensagens de voz e chat passarem no meio.
+   */
+  sendWait(peerId, msg) {
+    const p = this.peers.get(peerId);
+    if (!p || !p.conn || !p.conn.ready) return Promise.resolve(false);
+    const socket = p.conn.socket;
+    if (socket.write(JSON.stringify(msg) + '\n')) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const done = (ok) => {
+        socket.off('drain', onDrain);
+        socket.off('close', onClose);
+        resolve(ok);
+      };
+      const onDrain = () => done(true);
+      const onClose = () => done(false);
+      socket.on('drain', onDrain);
+      socket.on('close', onClose);
+    });
+  }
+
   broadcast(msg) {
     const line = JSON.stringify(msg) + '\n';
     for (const p of this.peers.values()) if (p.conn && p.conn.ready) p.conn.socket.write(line);
