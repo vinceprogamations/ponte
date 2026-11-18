@@ -26,7 +26,18 @@ const BY_EXT = {
 function guessMime(name, mime) {
   if (MIMES.has(mime)) return mime;
   const ext = String(name || '').split('.').pop().toLowerCase();
-  return BY_EXT[ext] || '';
+  if (BY_EXT[ext]) return BY_EXT[ext];
+  // Qualquer outro arquivo é aceito; só imagens e vídeos são mostrados na conversa.
+  return /^[\w.+-]{1,60}\/[\w.+-]{1,80}$/.test(String(mime || '')) ? String(mime) : 'application/octet-stream';
+}
+
+/** Imagem ou vídeo que a conversa sabe mostrar. */
+const isViewable = (mime) => MIMES.has(mime);
+
+/** Nome seguro para salvar no disco. */
+function safeName(name) {
+  const n = String(name || 'arquivo').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/^[. ]+|[. ]+$/g, '').slice(0, 120);
+  return /^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i.test(n) || !n ? `arquivo-${n}` : n;
 }
 
 /** Valida e limpa os dados de um anexo vindos de outro computador. */
@@ -59,7 +70,6 @@ class MediaStore extends EventEmitter {
   /** Copia (ou grava) um arquivo escolhido pelo usuário para o acervo. */
   async import({ srcPath, bytes, name, mime }) {
     const type = guessMime(name || srcPath, mime);
-    if (!type) throw new Error('Só dá para enviar imagens e vídeos.');
     const size = srcPath ? (await fsp.stat(srcPath)).size : bytes.byteLength;
     if (size <= 0) throw new Error('Arquivo vazio.');
     if (size > MAX_BYTES) throw new Error('O arquivo passa de 500 MB.');
@@ -174,6 +184,29 @@ class MediaStore extends EventEmitter {
     fsp.rm(inc.tmp, { force: true }).catch(() => {});
   }
 
+  /**
+   * Copia o anexo para Downloads\Ponte com o nome original e devolve o caminho.
+   * Marca o arquivo como vindo da internet (Zone.Identifier), para o Windows
+   * avisar antes de abrir um programa recebido.
+   */
+  async exportTo(dir, id) {
+    const meta = this.has(id) && this.meta(id);
+    if (!meta) throw new Error('O arquivo ainda não chegou.');
+    if (meta.exported && fs.existsSync(meta.exported)) return meta.exported;
+    await fsp.mkdir(dir, { recursive: true });
+    const base = safeName(meta.name);
+    const dot = base.lastIndexOf('.');
+    const stem = dot > 0 ? base.slice(0, dot) : base;
+    const ext = dot > 0 ? base.slice(dot) : '';
+    let target = path.join(dir, base);
+    for (let i = 1; fs.existsSync(target); i++) target = path.join(dir, `${stem} (${i})${ext}`);
+    await fsp.copyFile(this.file(id), target);
+    try { await fsp.writeFile(`${target}:Zone.Identifier`, '[ZoneTransfer]\r\nZoneId=3\r\n'); } catch {}
+    meta.exported = target;
+    await fsp.writeFile(this.metaFile(id), JSON.stringify(meta));
+    return target;
+  }
+
   /** Responde ao protocolo ponte-media://file/<id>, com Range para vídeos. */
   respond(request) {
     const id = new URL(request.url).pathname.replace(/^\//, '');
@@ -181,7 +214,8 @@ class MediaStore extends EventEmitter {
     if (!meta) return new Response('não encontrado', { status: 404 });
     const file = this.file(id);
     const size = fs.statSync(file).size;
-    const headers = { 'Content-Type': meta.mime, 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store' };
+    // Só imagem/vídeo é exibido; o resto vai como binário para nunca ser interpretado.
+    const headers = { 'Content-Type': isViewable(meta.mime) ? meta.mime : 'application/octet-stream', 'X-Content-Type-Options': 'nosniff', 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store' };
     const range = /bytes=(\d*)-(\d*)/.exec(request.headers.get('range') || '');
     if (range && (range[1] !== '' || range[2] !== '')) {
       let start;
@@ -202,4 +236,4 @@ class MediaStore extends EventEmitter {
   }
 }
 
-module.exports = { MediaStore, cleanFile, MAX_BYTES };
+module.exports = { MediaStore, cleanFile, MAX_BYTES, isViewable };

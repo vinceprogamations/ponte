@@ -3,9 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data: ponte-media:; media-src 'self' blob: mediastream: ponte-media:;" />
+        content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; font-src 'self'; img-src 'self' data: ponte-media:; media-src 'self' blob: mediastream: ponte-media:;" />
   <title>Ponte</title>
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles-v2.css" />
 </head>
 <body>
   <div class="ambient" aria-hidden="true"><span class="orbit o1"><i></i></span><span class="orbit o2 rev"><i></i></span><span class="orbit o3"><i></i></span><span class="orbit o4 rev"><i></i></span></div>
@@ -28,20 +29,10 @@
       </header>
 
       <nav class="channels">
-        <div class="group">
-          <button class="row active" id="ch-chat">
-            <span class="sq blue"><svg viewBox="0 0 24 24"><path d="M12 4c4.97 0 9 3.36 9 7.5S16.97 19 12 19c-1.1 0-2.15-.16-3.12-.46L4 20l1.4-3.6C3.9 15.07 3 13.36 3 11.5 3 7.36 7.03 4 12 4z"/></svg></span>
-            <span class="row-label">Conversa</span>
-            <span class="badge" id="unread" hidden></span>
-            <svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>
-          </button>
-          <button class="row" id="ch-voice">
-            <span class="sq green"><svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg></span>
-            <span class="row-label">Sala de voz</span>
-            <svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>
-          </button>
-        </div>
-        <ul class="voice-members" id="voice-members"></ul>
+        <div class="nav-section"><span>Texto</span><button type="button" class="add-btn" data-kind="text" title="Novo canal de texto" aria-label="Novo canal de texto">+</button></div>
+        <div class="group" id="text-channels"></div>
+        <div class="nav-section"><span>Voz</span><button type="button" class="add-btn" data-kind="voice" title="Nova sala de voz" aria-label="Nova sala de voz">+</button></div>
+        <div class="group" id="voice-rooms"></div>
       </nav>
 
       <div class="voice-panel" id="voice-panel" hidden>
@@ -92,13 +83,22 @@
       <section class="view" id="view-chat">
         <div class="messages" id="messages"></div>
         <div class="drop-hint" id="drop-hint" hidden>
-          <div><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg><strong>Solte para enviar</strong><small>Imagens e vídeos de até 500 MB</small></div>
+          <div><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg><strong>Solte para enviar</strong><small>Qualquer arquivo de até 500 MB</small></div>
+        </div>
+        <div class="composer-extras">
+          <div class="mentions" id="mentions" hidden></div>
+          <div class="typing" id="typing" hidden><span class="dots"><i></i><i></i><i></i></span><span id="typing-text"></span></div>
+          <div class="composer-bar" id="composer-bar" hidden>
+            <span class="cb-icon" id="composer-bar-icon"></span>
+            <div class="cb-text"><strong id="composer-bar-text"></strong><small id="composer-bar-sub"></small></div>
+            <button type="button" class="circle-btn small" id="composer-cancel" aria-label="Cancelar"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+          </div>
         </div>
         <form class="composer glass" id="composer" data-liquid="26">
-          <button type="button" class="attach" id="btn-attach" title="Enviar imagem ou vídeo" aria-label="Enviar imagem ou vídeo">
+          <button type="button" class="attach" id="btn-attach" title="Enviar arquivo, imagem ou vídeo" aria-label="Enviar arquivo">
             <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
           </button>
-          <input type="file" id="file-input" accept="image/*,video/*" multiple hidden />
+          <input type="file" id="file-input" multiple hidden />
           <textarea id="composer-input" rows="1" placeholder="Mensagem" maxlength="4000" aria-label="Mensagem"></textarea>
           <button type="submit" class="send" title="Enviar" aria-label="Enviar">
             <svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
@@ -125,9 +125,19 @@
             <svg class="on" viewBox="0 0 24 24"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/></svg>
             <svg class="off" viewBox="0 0 24 24"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/><path d="M4 4l16 16"/></svg>
           </button>
+          <button class="ctl toggle-on" id="ctl-cam" title="Ligar câmera" aria-label="Câmera">
+            <svg viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="3"/><path d="m16 10 5-3v10l-5-3"/></svg>
+          </button>
           <button class="ctl wide" id="ctl-share" title="Compartilhar tela">
             <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
             <span id="ctl-share-label">Compartilhar tela</span>
+          </button>
+          <button class="ctl" id="ctl-sound" title="Soundboard" aria-label="Soundboard">
+            <svg viewBox="0 0 24 24"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg>
+          </button>
+          <button class="ctl" id="ctl-clip" title="Salvar os últimos 30 s (Ctrl+Shift+X)" aria-label="Salvar clipe" hidden>
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+            <span>Clipe</span>
           </button>
           <button class="ctl danger" id="ctl-leave" title="Sair da voz" aria-label="Sair da voz">
             <svg viewBox="0 0 24 24"><path d="M4 15c4.5-4 11.5-4 16 0l-2 3-3-1v-2.5a9 9 0 0 0-6 0V17l-3 1z"/></svg>
@@ -191,6 +201,43 @@
           </label>
         </div>
 
+        <div class="field">
+          <span>Modo de voz</span>
+          <div class="segmented tabs" id="set-voice-mode" role="tablist">
+            <button type="button" class="tab" data-mode="auto">Detecção automática</button>
+            <button type="button" class="tab" data-mode="ptt">Apertar para falar</button>
+          </div>
+          <div class="ptt-row" id="set-ptt-row" hidden>
+            <span>Tecla</span>
+            <button type="button" class="pill-btn key-btn" id="set-ptt-key">V</button>
+            <small>Funciona com o jogo na frente. Aceita os botões laterais do mouse.</small>
+          </div>
+        </div>
+
+        <label class="switch-row">
+          <span>Supressão de ruído com IA <small>tira teclado, ventilador e barulho de fundo</small></span>
+          <input type="checkbox" role="switch" id="set-ai" checked />
+        </label>
+
+        <label class="switch-row">
+          <span>Overlay no jogo <small>mostra quem está falando por cima do jogo</small></span>
+          <input type="checkbox" role="switch" id="set-overlay" checked />
+        </label>
+
+        <label class="switch-row">
+          <span>Guardar os últimos 30 s para clipes <small>com a janela da Ponte aberta; usa um pouco mais de processador</small></span>
+          <input type="checkbox" role="switch" id="set-clips" checked />
+        </label>
+
+        <div class="field">
+          <span>Atalhos (funcionam com o jogo na frente)</span>
+          <ul class="shortcuts">
+            <li><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>M</kbd><span>Silenciar microfone</span></li>
+            <li><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>D</kbd><span>Ensurdecer</span></li>
+            <li><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>X</kbd><span>Salvar os últimos 30 s da transmissão</span></li>
+          </ul>
+        </div>
+
         <label class="switch-row">
           <span>Efeito Liquid Glass</span>
           <input type="checkbox" role="switch" id="set-glass" checked />
@@ -226,6 +273,18 @@
 
       <footer class="sheet-foot">
         <button class="pill-btn primary large" id="set-save" value="save">Salvar</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- Pergunta um nome (novo canal, renomear) -->
+  <dialog id="dlg-prompt" closedby="any" aria-labelledby="prompt-title">
+    <form method="dialog" class="sheet glass small-sheet">
+      <header class="sheet-head"><h2 id="prompt-title"></h2></header>
+      <label class="field"><input id="prompt-input" maxlength="32" autocomplete="off" aria-label="Nome" /></label>
+      <footer class="sheet-foot">
+        <button class="pill-btn large" value="cancel">Cancelar</button>
+        <button class="pill-btn primary large" id="prompt-ok" value="ok">Criar</button>
       </footer>
     </form>
   </dialog>
@@ -287,6 +346,8 @@
   <div class="toast glass" id="toast" role="status" hidden></div>
   <script src="glass.js"></script>
   <script src="demo.js"></script>
+  <script src="audio.js"></script>
+  <script src="extras.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

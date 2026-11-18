@@ -6,7 +6,12 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const { spawn, execFile } = require('node:child_process');
 const { LanNode, localInterfaces } = require('./lan');
-const { MediaStore, cleanFile } = require('./media');
+const { MediaStore, isViewable } = require('./media');
+const { ChatStore } = require('./chat');
+const { createHotkeys } = require('./hotkeys');
+const { createPresence } = require('./presence');
+const { createOverlay } = require('./overlay');
+const { prepareClip } = require('./mp4fix');
 const updater = require('./updater');
 const { createTray } = require('./tray');
 
@@ -38,7 +43,10 @@ if (!AUTOTEST && !process.env.PONTE_PROFILE && !app.requestSingleInstanceLock())
 let win = null;
 let node = null;
 let config = null;
-let history = [];
+let chat = null;
+let hotkeys = null;
+let presence = null;
+let overlay = null;
 let pendingScreen = null; // { id, audio }
 let tray = null;
 let quitting = false; // true quando o usuário manda fechar de vez (não só esconder)
@@ -71,43 +79,23 @@ function loadConfig() {
 
 const saveConfig = () => writeJson(userFile('config.json'), config);
 
-let historyTimer = null;
-function saveHistorySoon() {
-  clearTimeout(historyTimer);
-  historyTimer = setTimeout(() => writeJson(userFile('history.json'), history.slice(-500)), 500);
-}
-
-function addMessages(msgs) {
-  const known = new Set(history.map((m) => m.id));
-  const fresh = [];
-  for (const m of msgs) {
-    if (!m || typeof m.id !== 'string' || known.has(m.id)) continue;
-    const file = m.file ? cleanFile(m.file) : null;
-    const text = typeof m.text === 'string' ? m.text.slice(0, 4000) : '';
-    if (!text.trim() && !file) continue;
-    const clean = {
-      id: m.id,
-      from: String(m.from || ''),
-      name: String(m.name || 'Sem nome').slice(0, 40),
-      text,
-      ts: Number(m.ts) || Date.now(),
-    };
-    if (file) clean.file = file;
-    history.push(clean);
-    known.add(clean.id);
-    fresh.push(clean);
-  }
-  if (fresh.length) {
-    history.sort((a, b) => a.ts - b.ts);
-    history = history.slice(-500);
-    saveHistorySoon();
-  }
-  return fresh;
-}
-
 /** Para a interface: diz se o anexo já está neste computador. */
 const decorate = (m) => (m.file ? { ...m, file: { ...m.file, local: !!media && media.has(m.file.id) } } : m);
-const preview = (m) => (m.file ? `${m.file.mime.startsWith('video/') ? '🎬 Vídeo' : '📷 Imagem'}${m.text ? ` · ${m.text}` : ''}` : m.text);
+const fileLabel = (f) => (f.mime.startsWith('video/') && isViewable(f.mime) ? '🎬 Vídeo' : isViewable(f.mime) ? '📷 Imagem' : `📎 ${f.name}`);
+const preview = (m) => (m.file ? `${fileLabel(m.file)}${m.text ? ` · ${m.text}` : ''}` : m.text);
+/** Menciona você (@seunome) ou todo mundo (@todos)? */
+const mentionsMe = (m) => {
+  const t = String(m.text || '').toLowerCase();
+  return t.includes(`@${config.name.toLowerCase()}`) || /(^|\s)@(todos|everyone|here)\b/.test(t);
+};
+/** Avisa no Windows. Jogando em tela cheia, só avisa quando mencionam você. */
+function notifyMessage(m) {
+  if (!win || win.isFocused()) return;
+  const mention = mentionsMe(m);
+  if (presence && presence.inFullscreenGame() && !mention) return;
+  win.flashFrame(true);
+  notify(mention ? `${m.name} mencionou você` : m.name, preview(m).slice(0, 120), showWindow);
+}
 
 const send = (channel, payload) => {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -132,6 +120,8 @@ function me() {
     autotestDialog: AUTOTEST ? process.env.PONTE_AUTOTEST_DIALOG || '' : '',
     autotestCanvas: AUTOTEST && process.env.PONTE_AUTOTEST_CANVAS === '1',
     autotestMedia: AUTOTEST ? process.env.PONTE_AUTOTEST_MEDIA || '' : '',
+    autotestFeatures: AUTOTEST ? process.env.PONTE_AUTOTEST_FEATURES || '' : '',
+    autotestClip: AUTOTEST ? Number(process.env.PONTE_AUTOTEST_CLIP) || 0 : 0,
     autotestAudio: AUTOTEST ? process.env.PONTE_AUTOTEST_AUDIO || '' : '',
     mainPid: process.pid,
     manualHosts: config.manualHosts,
@@ -158,8 +148,16 @@ async function startNetwork() {
     if (tray) tray.refresh();
   });
   node.on('connected', (peerId) => {
-    // Sincroniza o histórico com quem acabou de chegar.
-    node.sendTo(peerId, { t: 'history', msgs: history.slice(-100) });
+    // Sincroniza histórico e canais com quem acabou de chegar.
+    node.sendTo(peerId, { t: 'history', msgs: chat.recent(300) });
+    node.sendTo(peerId, { t: 'channels', list: chat.allChannels() });
+  });
+  // Ping de cada amigo (pela conexão da Ponte), mandado à interface a cada 2 s.
+  const rtts = {};
+  let rttTimer = null;
+  node.on('rtt', (peerId, ms) => {
+    rtts[peerId] = ms;
+    if (!rttTimer) rttTimer = setTimeout(() => { rttTimer = null; send('rtt', { ...rtts }); }, 2000);
   });
   media = new MediaStore(userFile('media'), node);
   media.on('progress', (p) => send('media:progress', p));
@@ -172,20 +170,25 @@ async function startNetwork() {
   };
   node.on('message', (peerId, msg) => {
     if (media.handle(peerId, msg)) return;
-    if (msg.t === 'chat') {
-      const fresh = addMessages([{ ...msg.msg, from: peerId }]);
+    if (msg.t === 'chat' && msg.msg) {
+      const { fresh } = chat.merge([{ ...msg.msg, from: peerId, v: 0, reactions: undefined, deleted: false }]);
       fetchMissing(peerId, fresh);
       for (const m of fresh) {
         send('chat', decorate(m));
-        if (win && !win.isFocused()) {
-          win.flashFrame(true);
-          notify(m.name, preview(m).slice(0, 120), showWindow);
-        }
+        notifyMessage(m);
       }
     } else if (msg.t === 'history' && Array.isArray(msg.msgs)) {
-      const fresh = addMessages(msg.msgs.slice(-100));
+      const { fresh, updated } = chat.merge(msg.msgs.slice(-300));
       fetchMissing(peerId, fresh);
       for (const m of fresh) send('chat', decorate(m));
+      for (const m of updated) send('chat:update', decorate(m));
+    } else if (msg.t === 'chat-op') {
+      const m = chat.apply(msg, peerId);
+      if (m) send('chat:update', decorate(m));
+    } else if (msg.t === 'channels') {
+      if (chat.mergeChannels(msg.list)) send('channels', chat.listChannels());
+    } else if (msg.t === 'typing') {
+      send('typing', { from: peerId, channel: String(msg.channel || 'geral').slice(0, 40) });
     } else if (msg.t === 'signal') {
       send('signal', { from: peerId, data: msg.data });
     }
@@ -253,6 +256,16 @@ function createWindow() {
         }, 1500);
       }, 10000);
     }
+    if (process.env.PONTE_AUTOTEST_PIP === "1") {
+      // Clica no botão de janela flutuante como se fosse o usuário.
+      setTimeout(async () => {
+        await win.webContents.executeJavaScript("document.querySelector('.tile.screen .pip-btn')?.click()", true);
+        setTimeout(async () => {
+          const ok = await win.webContents.executeJavaScript("!!document.pictureInPictureElement");
+          console.log(`[teste] janela flutuante aberta: ${ok}`);
+        }, 1500);
+      }, 14000);
+    }
     if (process.env.PONTE_SHOT) {
       // Salva uma captura da janela; usado para as imagens do README.
       setTimeout(async () => {
@@ -288,7 +301,32 @@ function setupMedia() {
 }
 
 function setupIpc() {
-  ipcMain.handle('init', () => ({ me: me(), peers: node.listPeers(), history: history.map(decorate) }));
+  ipcMain.handle('init', () => ({
+    me: me(),
+    peers: node.listPeers(),
+    history: chat.messages.map(decorate),
+    channels: chat.listChannels(),
+    playing: presence ? presence.playing() : '',
+  }));
+
+  const cleanReply = (r) => (r && typeof r.id === 'string' ? { id: r.id, name: String(r.name || ''), text: String(r.text || '') } : undefined);
+  const newMessage = (req, extra = {}) => ({
+    id: crypto.randomUUID(),
+    from: config.id,
+    name: config.name,
+    text: String((req && req.text) || '').trim().slice(0, 4000),
+    ts: Date.now(),
+    channel: String((req && req.channel) || 'geral'),
+    replyTo: cleanReply(req && req.replyTo),
+    v: 0,
+    ...extra,
+  });
+  const publish = (msg) => {
+    const { fresh } = chat.merge([msg]);
+    const m = fresh[0];
+    if (m) node.broadcast({ t: 'chat', msg: m });
+    return m ? decorate(m) : null;
+  };
 
   ipcMain.handle('media:send', async (_e, req) => {
     const meta = await media.import({
@@ -297,20 +335,106 @@ function setupIpc() {
       name: req && req.name,
       mime: req && req.mime,
     });
-    const text = String((req && req.text) || '').trim().slice(0, 4000);
-    const msg = { id: crypto.randomUUID(), from: config.id, name: config.name, text, ts: Date.now(), file: meta };
-    addMessages([msg]);
-    node.broadcast({ t: 'chat', msg }); // quem recebe pede o arquivo (file-get)
-    return decorate(msg);
+    return publish(newMessage(req, { file: meta })); // quem recebe pede o arquivo (file-get)
   });
 
-  ipcMain.handle('chat:send', (_e, text) => {
-    text = String(text || '').trim().slice(0, 4000);
-    if (!text) return null;
-    const msg = { id: crypto.randomUUID(), from: config.id, name: config.name, text, ts: Date.now() };
-    addMessages([msg]);
-    node.broadcast({ t: 'chat', msg });
-    return msg;
+  ipcMain.handle('chat:send', (_e, req) => {
+    if (typeof req === 'string') req = { text: req };
+    const msg = newMessage(req);
+    return msg.text ? publish(msg) : null;
+  });
+
+  // Editar, apagar e reagir: aplica aqui e avisa os outros.
+  const op = (o) => {
+    const m = chat.apply(o, config.id);
+    if (!m) return null;
+    node.broadcast({ t: 'chat-op', ...o, v: m.v });
+    return decorate(m);
+  };
+  ipcMain.handle('chat:edit', (_e, { id, text }) => op({ op: 'edit', id: String(id), text: String(text || '') }));
+  ipcMain.handle('chat:delete', (_e, id) => op({ op: 'delete', id: String(id) }));
+  ipcMain.handle('chat:react', (_e, { id, emoji, on }) => op({ op: 'react', id: String(id), emoji: String(emoji || ''), on: !!on }));
+  ipcMain.on('chat:typing', (_e, channel) => node.broadcast({ t: 'typing', channel: String(channel || 'geral').slice(0, 40) }));
+
+  // Canais de texto e salas de voz
+  const channelsChanged = (c) => {
+    node.broadcast({ t: 'channels', list: [c] });
+    const list = chat.listChannels();
+    send('channels', list);
+    return list;
+  };
+  ipcMain.handle('channels:create', (_e, { kind, name }) => channelsChanged(chat.createChannel(kind, name)));
+  ipcMain.handle('channels:rename', (_e, { id, name }) => channelsChanged(chat.renameChannel(String(id), name)));
+  ipcMain.handle('channels:delete', (_e, id) => channelsChanged(chat.removeChannel(String(id))));
+
+  // Abrir/mostrar um arquivo recebido (cópia em Downloads\Ponte, marcada como da internet)
+  ipcMain.handle('media:open', async (_e, { id, reveal }) => {
+    const file = await media.exportTo(path.join(app.getPath('downloads'), 'Ponte'), String(id));
+    if (reveal) shell.showItemInFolder(file);
+    else {
+      const err = await shell.openPath(file);
+      if (err) throw new Error(err);
+    }
+    return file;
+  });
+
+  // Atalhos, apertar para falar e overlay
+  let lastOverlayShow = null;
+  ipcMain.on('ptt:set', (_e, vk) => { if (hotkeys) hotkeys.setPtt(vk); });
+  ipcMain.on('overlay:update', (_e, data) => {
+    if (!overlay) return;
+    const members = Array.isArray(data && data.members) ? data.members.slice(0, 12).map((m) => ({
+      name: String(m.name || '').slice(0, 40),
+      initials: String(m.initials || '').slice(0, 3),
+      color: /^#[0-9a-f]{6}$/i.test(m.color) ? m.color : '#888888',
+      speaking: !!m.speaking, muted: !!m.muted, deafened: !!m.deafened, sharing: !!m.sharing,
+    })) : [];
+    const show = !!(data && data.show) && members.length > 0;
+    if (AUTOTEST && show !== lastOverlayShow) { lastOverlayShow = show; console.log(`[teste] overlay visivel=${show} pessoas=${members.length}`); }
+    overlay.update({ show, members });
+  });
+
+  // Clipes: salvos em Vídeos\Ponte
+  const clipsDir = () => (AUTOTEST ? userFile('clips') : path.join(app.getPath('videos'), 'Ponte'));
+  ipcMain.handle('clip:save', async (_e, { bytes, ext }) => {
+    const dir = clipsDir();
+    fs.mkdirSync(dir, { recursive: true });
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
+    const file = path.join(dir, `Clipe ${stamp}.${ext === 'mp4' ? 'mp4' : 'webm'}`);
+    // Clipe = cabeçalho + últimos pedaços: zera o relógio e grava a duração para os players.
+    const { data, seconds } = prepareClip(Buffer.from(bytes));
+    fs.writeFileSync(file, data);
+    return { file, seconds };
+  });
+  ipcMain.on('clip:reveal', (_e, file) => {
+    const f = path.resolve(String(file || ''));
+    if (f.startsWith(clipsDir()) && fs.existsSync(f)) shell.showItemInFolder(f);
+  });
+
+  // Soundboard: sons próprios ficam na pasta do app
+  const soundsDir = () => userFile('sounds');
+  const soundsIndex = () => readJson(path.join(soundsDir(), 'index.json'), []);
+  ipcMain.handle('sounds:list', () => soundsIndex());
+  ipcMain.handle('sounds:get', (_e, id) => {
+    if (!/^[0-9a-f]{16}$/.test(String(id))) return null;
+    try { return fs.readFileSync(path.join(soundsDir(), String(id))); } catch { return null; }
+  });
+  ipcMain.handle('sounds:add', (_e, { name, bytes }) => {
+    if (!bytes || bytes.byteLength > 2 * 1024 * 1024) throw new Error('Use um som de até 2 MB.');
+    const id = crypto.randomBytes(8).toString('hex');
+    fs.mkdirSync(soundsDir(), { recursive: true });
+    fs.writeFileSync(path.join(soundsDir(), id), Buffer.from(bytes));
+    const list = [...soundsIndex(), { id, name: String(name || 'Som').replace(/\.[^.]+$/, '').slice(0, 24) }].slice(-24);
+    writeJson(path.join(soundsDir(), 'index.json'), list);
+    return list;
+  });
+  ipcMain.handle('sounds:remove', (_e, id) => {
+    const list = soundsIndex().filter((x) => x.id !== id);
+    writeJson(path.join(soundsDir(), 'index.json'), list);
+    if (/^[0-9a-f]{16}$/.test(String(id))) fs.rmSync(path.join(soundsDir(), String(id)), { force: true });
+    return list;
   });
 
   // Só no autoteste: descarta as primeiras N mensagens para simular perda.
@@ -324,6 +448,9 @@ function setupIpc() {
     const allowed = {};
     for (const k of ['voice', 'muted', 'deafened', 'sharing']) if (k in patch) allowed[k] = !!patch[k];
     if ('quality' in patch) allowed.quality = String(patch.quality || '').replace(/[^0-9p]/g, '').slice(0, 8);
+    if ('room' in patch) allowed.room = /^[a-z0-9-]{0,40}$/.test(String(patch.room || '')) ? String(patch.room || '') : '';
+    for (const k of ['camId', 'screenId']) if (k in patch) allowed[k] = String(patch[k] || '').replace(/[^\w{}-]/g, '').slice(0, 80);
+    if ('cam' in patch) allowed.cam = !!patch.cam;
     node.setState(allowed);
     for (const k of Object.keys(voiceState)) if (k in allowed) voiceState[k] = allowed[k];
     if (tray) tray.refresh();
@@ -458,8 +585,7 @@ app.whenReady().then(async () => {
   await updater.startup();
 
   config = loadConfig();
-  history = readJson(userFile('history.json'), []);
-  if (!Array.isArray(history)) history = [];
+  chat = new ChatStore(app.getPath('userData'));
   setupMedia();
   setupIpc();
   setupAppAudio();
@@ -472,11 +598,35 @@ app.whenReady().then(async () => {
   createWindow();
   updater.closeSplash();
   setupTray();
+  setupExtras();
 });
 
 app.on('second-instance', showWindow);
 app.on('activate', showWindow); // macOS: clicar no ícone do Dock reabre a janela
 app.on('before-quit', () => { quitting = true; });
+
+// ------------------------------------------------------------------ atalhos, status de jogo e overlay
+function setupExtras() {
+  const helper = audioHelper();
+  hotkeys = createHotkeys({
+    helper,
+    onCommand: (cmd) => send('hotkey', cmd),
+    onPtt: (down) => send('ptt', down),
+    log: (line) => console.log(`[atalhos] ${line}`),
+  });
+  if (DEMO) {
+    const playing = process.env.PONTE_DEMO_PLAYING || '';
+    presence = { playing: () => playing, inFullscreenGame: () => false, dispose() {} };
+    if (playing && node) node.setState({ playing });
+  } else presence = createPresence({
+    helper,
+    onChange: ({ playing }) => {
+      if (node) node.setState({ playing });
+      send('presence', { playing });
+    },
+  });
+  overlay = createOverlay();
+}
 
 // ------------------------------------------------------------------ som por aplicativo
 // O Electron só captura o som do sistema inteiro. Para mandar só o som do
@@ -556,6 +706,9 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   stopAppAudio();
+  if (hotkeys) hotkeys.dispose();
+  if (presence) presence.dispose();
+  if (overlay) overlay.destroy();
   if (node) node.stop();
   updater.stop();
   if (tray) { tray.destroy(); tray = null; }

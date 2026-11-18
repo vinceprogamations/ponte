@@ -1,0 +1,23 @@
+@font-face {
+  font-family: "Inter";
+  font-weight: 100 900;
+  src: url("fonts/Inter-latin.woff2") format("woff2-variations");
+}
+html, body { margin: 0; background: transparent; overflow: hidden; }
+body { font: 600 14px/1 "Inter", "Segoe UI", sans-serif; color: #fff; padding: 8px; user-select: none; }
+ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+li {
+  display: flex; align-items: center; gap: 9px; height: 36px; padding: 0 12px 0 4px; width: fit-content; max-width: 230px;
+  border-radius: 18px; background: rgba(20, 20, 22, .62);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.18), 0 4px 14px rgba(0,0,0,.35);
+  opacity: .78; transition: opacity .15s, background .15s;
+}
+li.speaking { opacity: 1; background: rgba(20, 20, 22, .82); }
+.av {
+  width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; flex: none;
+  font-size: 11px; font-weight: 800; color: rgba(0,0,0,.78); transition: box-shadow .12s;
+}
+li.speaking .av { box-shadow: 0 0 0 2px rgba(20,20,22,.9), 0 0 0 4px #30d158; }
+.name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 1px 2px rgba(0,0,0,.6); }
+.flag { font-size: 12px; opacity: .9; }
+.live { background: #ff453a; color: #fff; font-size: 9px; font-weight: 800; padding: 2px 5px; border-radius: 5px; letter-spacing: .04em; }

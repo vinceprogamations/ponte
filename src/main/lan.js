@@ -346,7 +346,17 @@ class LanNode extends EventEmitter {
     p.lastSeen = Date.now();
     switch (msg.t) {
       case 'ping':
+        if (msg.ts) conn.socket.write(JSON.stringify({ t: 'pong', ts: msg.ts }) + '\n');
         return;
+      case 'pong': {
+        // Ida e volta pela conexão da Ponte = ping do amigo
+        const rtt = Date.now() - Number(msg.ts);
+        if (rtt >= 0 && rtt < 60000) {
+          p.rtt = rtt;
+          this.emit('rtt', p.id, rtt);
+        }
+        return;
+      }
       case 'name':
         p.name = String(msg.name || p.name).slice(0, 40);
         this.emit('peers');
@@ -363,7 +373,7 @@ class LanNode extends EventEmitter {
   _tick() {
     const now = Date.now();
     for (const p of this.peers.values()) {
-      if (p.conn && p.conn.ready) p.conn.socket.write('{"t":"ping"}\n');
+      if (p.conn && p.conn.ready) p.conn.socket.write(JSON.stringify({ t: 'ping', ts: now }) + '\n');
       else if (now - p.lastSeen < PEER_TIMEOUT_MS) this._maybeConnect(p);
       else if (!p.conn && !p.connecting) {
         p.firstSeen = now; // reinicia a janela de 5 s quando ele voltar

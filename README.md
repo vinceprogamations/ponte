@@ -40,7 +40,8 @@ Sem servidor, sem conta, sem configurar nada.
 
 O canal **#geral** guarda o histórico nos computadores de vocês.<br>
 Quem chega depois recebe o que perdeu assim que entra.<br>
-Mande **imagens e vídeos** de até 500 MB: pelo **+**, arrastando para a conversa ou com Ctrl+V.
+Crie **canais** à vontade, responda, reaja, edite, apague e marque com **@nome**.<br>
+Mande **qualquer arquivo** de até 500 MB: pelo **+**, arrastando para a conversa ou com Ctrl+V.
 
 </div>
 
@@ -69,6 +70,17 @@ Quem assiste ajusta **o volume da transmissão** separado da voz, e os controles
 </div>
 
 <img src="docs/img/tela.png" width="100%" alt="Janela de compartilhar tela com a escolha de resolução, fps e som" />
+
+<div align="center">
+
+## Feito para jogar.
+
+**Apertar para falar** com qualquer tecla ou botão do mouse, e atalhos que funcionam com o jogo na frente<br>
+(**Ctrl+Shift+M** silencia, **Ctrl+Shift+D** ensurdece, **Ctrl+Shift+X** salva os últimos 30 s da transmissão).<br>
+**Overlay** de quem está falando por cima do jogo, **janela flutuante** da transmissão, **supressão de ruído com IA**,<br>
+**câmera**, **soundboard**, **várias salas de voz** e o status **"Jogando …"** detectado sozinho.
+
+</div>
 
 <div align="center">
 

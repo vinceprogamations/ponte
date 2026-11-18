@@ -22,15 +22,34 @@ const PEOPLE = {
 
 const today = new Date();
 const at = (h, m) => new Date(today.getFullYear(), today.getMonth(), today.getDate(), h, m).getTime();
-const HISTORY = [
+// Anexo de exemplo (um .zip) que já está no computador de todo mundo
+const ZIP = { id: '7d1e6a52-3c1f-4b8e-9a6d-2f4b8c9d0e11', name: 'mapa-da-ilha.zip', size: 2516582, mime: 'application/zip' };
+const RAW = [
   ['Lucas', 'alguém on? abri a Ponte aqui', 21, 2],
-  ['Rafa', 'eu! já apareceu você na lista sozinho', 21, 3],
+  ['Rafa', 'eu! já apareceu você na lista sozinho', 21, 3, { reactions: { '🙌': ['Lucas', 'Bia'] } }],
   ['Bia', 'chegando 🙋‍♀️', 21, 3],
-  ['Lucas', 'bora terminar a missão da ilha hoje?', 21, 4],
-  ['Rafa', 'bora. entra na sala de voz que eu vou jogando', 21, 5],
-  ['Bia', 'compartilha a tela em 1080p 60 que fica liso', 21, 5],
-  ['Lucas', 'pode deixar, e vai só o som do jogo, sem eco do Discord 😎', 21, 6],
-].map(([name, text, h, m], i) => ({ id: `demo-${i}`, from: PEOPLE[name], name, text, ts: at(h, m) }));
+  ['Lucas', '@Rafa bora terminar a missão da ilha hoje?', 21, 4],
+  ['Rafa', 'bora. entra na Squad que eu vou jogando', 21, 5, { replyTo: 3, edited: true }],
+  ['Bia', '', 21, 5, { file: ZIP }],
+  ['Bia', 'mandei o mapa aí em cima 👆', 21, 5],
+  ['Lucas', 'transmito em 1080p 60 e vai só o som do jogo 😎', 21, 6, { reactions: { '🔥': ['Rafa', 'Bia'], '❤️': ['Rafa'] } }],
+];
+const HISTORY = RAW.map(([name, text, h, m, extra = {}], i) => {
+  const msg = { id: `demo-${i}`, from: PEOPLE[name], name, text, ts: at(h, m), channel: 'geral', v: 1 };
+  if (extra.reactions) msg.reactions = Object.fromEntries(Object.entries(extra.reactions).map(([e, who]) => [e, who.map((n) => PEOPLE[n])]));
+  if (extra.replyTo !== undefined) {
+    const [rn, rt] = RAW[extra.replyTo];
+    msg.replyTo = { id: `demo-${extra.replyTo}`, name: rn, text: rt };
+  }
+  if (extra.edited) msg.edited = at(h, m) + 30000;
+  if (extra.file) msg.file = extra.file;
+  return msg;
+});
+const CHANNELS = [
+  { id: 't-jogos', name: 'jogos', kind: 'text', ts: 1 },
+  { id: 't-memes', name: 'memes', kind: 'text', ts: 1 },
+  { id: 'v-squad', name: 'Squad', kind: 'voice', ts: 1 },
+];
 
 function profile(name) {
   const dir = path.join(root, `perfil-shot-${name.toLowerCase()}`);
@@ -40,6 +59,10 @@ function profile(name) {
     id: PEOPLE[name], name, manualHosts: name === 'Rafa' ? ['26.48.113.9'] : [], trayHintShown: true,
   }));
   fs.writeFileSync(path.join(dir, 'history.json'), JSON.stringify(HISTORY));
+  fs.writeFileSync(path.join(dir, 'channels.json'), JSON.stringify(CHANNELS));
+  fs.mkdirSync(path.join(dir, 'media'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'media', ZIP.id), Buffer.alloc(16));
+  fs.writeFileSync(path.join(dir, 'media', `${ZIP.id}.json`), JSON.stringify(ZIP));
   return dir;
 }
 
@@ -50,8 +73,11 @@ function launch(name, env) {
       ...process.env,
       PONTE_AUTOTEST: '1',
       PONTE_DEMO: '1',
+      // Porta própria: as janelas de demonstração nunca acham a Ponte de ninguém de verdade.
+      PONTE_DISCOVERY_PORT: '49999',
       PONTE_NAME: name,
       PONTE_PROFILE: profile(name),
+      PONTE_DEMO_PLAYING: name === 'Lucas' ? 'Ilha das Gaivotas' : name === 'Bia' ? 'Minecraft' : '',
       ...env,
     },
     // Só quem tira a foto tem a saída lida; os outros não podem travar com o buffer cheio.

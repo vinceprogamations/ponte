@@ -203,11 +203,87 @@ static int capture(DWORD pid, bool include) {
   }
 }
 
+// ------------------------------------------------------------ teclas globais
+// Lê o estado das teclas (GetAsyncKeyState) sem instalar gancho de teclado,
+// para funcionar com o jogo em primeiro plano sem incomodar antitrapaça.
+// Entrada (linhas): "watch 86 5" = códigos virtuais a observar.
+// Saída (linhas):   "down 86" / "up 86".
+static volatile LONG gWatch[32];
+static volatile LONG gWatchCount = 0;
+static volatile LONG gStop = 0;
+
+static DWORD WINAPI readCommands(LPVOID) {
+  char line[512];
+  while (fgets(line, sizeof(line), stdin)) {
+    if (strncmp(line, "watch", 5) != 0) continue;
+    LONG list[32];
+    LONG n = 0;
+    char* ctx = nullptr;
+    for (char* tok = strtok_s(line + 5, " \r\n", &ctx); tok && n < 32; tok = strtok_s(nullptr, " \r\n", &ctx)) {
+      long vk = strtol(tok, nullptr, 0);
+      if (vk > 0 && vk < 256) list[n++] = vk;
+    }
+    InterlockedExchange(&gWatchCount, 0);
+    for (LONG i = 0; i < n; i++) InterlockedExchange(&gWatch[i], list[i]);
+    InterlockedExchange(&gWatchCount, n);
+  }
+  InterlockedExchange(&gStop, 1);  // a Ponte fechou: encerra
+  return 0;
+}
+
+static int keys() {
+  setvbuf(stdout, nullptr, _IONBF, 0);
+  CreateThread(nullptr, 0, readCommands, nullptr, 0, nullptr);
+  bool down[256] = {};
+  while (!gStop) {
+    LONG n = gWatchCount;
+    for (LONG i = 0; i < n; i++) {
+      int vk = (int)gWatch[i];
+      bool now = (GetAsyncKeyState(vk) & 0x8000) != 0;
+      if (now != down[vk]) {
+        down[vk] = now;
+        if (printf("%s %d\n", now ? "down" : "up", vk) < 0) return 0;
+      }
+    }
+    Sleep(8);
+  }
+  return 0;
+}
+
+// ------------------------------------------------------------ janela em primeiro plano
+// Para o status "Jogando ...": qual programa está na frente e se cobre a tela.
+static int foreground() {
+  HWND hwnd = GetForegroundWindow();
+  if (!hwnd) { printf("{}\n"); return 0; }
+  DWORD pid = 0;
+  GetWindowThreadProcessId(hwnd, &pid);
+  wchar_t title[512] = L"";
+  GetWindowTextW(hwnd, title, 512);
+  std::wstring path;
+  if (HANDLE p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)) {
+    wchar_t buf[MAX_PATH * 2];
+    DWORD size = MAX_PATH * 2;
+    if (QueryFullProcessImageNameW(p, 0, buf, &size)) path = buf;
+    CloseHandle(p);
+  }
+  RECT wr = {};
+  GetWindowRect(hwnd, &wr);
+  MONITORINFO mi = {sizeof(mi)};
+  GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi);
+  bool full = wr.left <= mi.rcMonitor.left && wr.top <= mi.rcMonitor.top &&
+              wr.right >= mi.rcMonitor.right && wr.bottom >= mi.rcMonitor.bottom;
+  printf("{\"pid\":%lu,\"path\":\"%s\",\"title\":\"%s\",\"fullscreen\":%s}\n", pid,
+         jsonEscape(utf8(path)).c_str(), jsonEscape(utf8(title)).c_str(), full ? "true" : "false");
+  return 0;
+}
+
 int main(int argc, char** argv) {
   if (argc >= 2 && strcmp(argv[1], "windows") == 0) {
     EnumWindows(onWindow, 0);
     return 0;
   }
+  if (argc >= 2 && strcmp(argv[1], "keys") == 0) return keys();
+  if (argc >= 2 && strcmp(argv[1], "foreground") == 0) return foreground();
   if (argc >= 4 && strcmp(argv[1], "capture") == 0) {
     DWORD pid = strtoul(argv[2], nullptr, 10);
     bool include = strcmp(argv[3], "exclude") != 0;
