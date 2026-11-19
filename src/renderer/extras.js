@@ -236,3 +236,89 @@ function netBars(id) {
   el.innerHTML = '<i></i><i></i><i></i>';
   return el;
 }
+
+// ------------------------------------------------------------------ slider de vidro
+/**
+ * Slider no estilo iOS: arrasta suave, a bolinha vira uma lente de vidro
+ * enquanto você segura, um balão mostra a porcentagem e ele "gruda" de leve
+ * em 100%. Duplo clique volta para 100%; roda do mouse e setas também ajustam.
+ */
+function glassSlider({ value, min = 0, max = 1, label = '', onInput }) {
+  const el = document.createElement('div');
+  el.className = 'gslider';
+  el.tabIndex = 0;
+  el.setAttribute('role', 'slider');
+  el.setAttribute('aria-label', label);
+  el.setAttribute('aria-valuemin', String(Math.round(min * 100)));
+  el.setAttribute('aria-valuemax', String(Math.round(max * 100)));
+  el.innerHTML = '<div class="gs-track"><div class="gs-fill"></div><i class="gs-mark"></i></div><div class="gs-thumb"></div><div class="gs-tip"></div>';
+  const tip = el.querySelector('.gs-tip');
+  const track = el.querySelector('.gs-track');
+  const pct = (x) => (x - min) / (max - min);
+  el.style.setProperty('--m', String(pct(1)));
+  let v = value;
+  let frame = 0;
+  let pendingX = null;
+
+  function paint() {
+    el.style.setProperty('--p', String(Math.max(0.0001, pct(v))));
+    const txt = `${Math.round(v * 100)}%`;
+    tip.textContent = txt;
+    el.title = `${label}: ${txt}`;
+    el.setAttribute('aria-valuenow', String(Math.round(v * 100)));
+    el.classList.toggle('boost', v > 1.005);
+  }
+
+  function set(x, emit) {
+    x = Math.min(max, Math.max(min, x));
+    if (Math.abs(x - 1) < 0.04 * (max - min) / 2) x = 1; // gruda em 100%
+    x = Math.round(x * 100) / 100;
+    if (x === v) return;
+    v = x;
+    paint();
+    if (emit) onInput(v);
+  }
+
+  const fromPointer = (clientX) => {
+    const r = track.getBoundingClientRect();
+    return min + ((clientX - r.left) / r.width) * (max - min);
+  };
+
+  el.addEventListener('pointerdown', (e) => {
+    if (el.classList.contains('disabled') || e.button !== 0) return;
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    el.classList.add('drag');
+    set(fromPointer(e.clientX), true);
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (!el.classList.contains('drag')) return;
+    pendingX = e.clientX;
+    if (!frame) {
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        if (pendingX !== null) set(fromPointer(pendingX), true);
+        pendingX = null;
+      });
+    }
+  });
+  const end = () => el.classList.remove('drag');
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+  el.addEventListener('lostpointercapture', end);
+  el.addEventListener('dblclick', (e) => { e.stopPropagation(); set(1, true); });
+  el.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    set(v + (e.deltaY < 0 ? 0.05 : -0.05), true);
+  }, { passive: false });
+  el.addEventListener('keydown', (e) => {
+    const step = { ArrowRight: 0.05, ArrowUp: 0.05, ArrowLeft: -0.05, ArrowDown: -0.05 }[e.key];
+    if (step) { e.preventDefault(); set(v + step, true); }
+    else if (e.key === 'Home') { e.preventDefault(); set(min, true); }
+    else if (e.key === 'End') { e.preventDefault(); set(max, true); }
+  });
+  /** Atualiza de fora (sem disparar onInput), exceto enquanto o usuário arrasta. */
+  el._set = (x) => { if (!el.classList.contains('drag')) { v = Math.min(max, Math.max(min, x)); paint(); } };
+  paint();
+  return el;
+}

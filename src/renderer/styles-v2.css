@@ -154,3 +154,42 @@ body.ptt-down #me-avatar { box-shadow: 0 0 0 2.5px var(--bg), 0 0 0 5px var(--gr
   .nav-section { justify-content: center; }
   .row-count { display: none; }
 }
+
+/* ---------- Slider de vidro (volume até 500%) ---------- */
+.gslider { --p: .2; --m: .2; position: relative; width: 150px; height: 30px; flex: none; cursor: pointer; touch-action: none; outline: none; }
+.gs-track { position: absolute; left: 0; right: 0; top: 50%; height: 6px; transform: translateY(-50%); border-radius: 999px; background: rgba(255, 255, 255, .16); box-shadow: inset 0 1px 2px rgba(0, 0, 0, .4); }
+.gs-fill { position: absolute; left: 0; top: 0; bottom: 0; width: calc(var(--p) * 100%); border-radius: inherit;
+  /* branco até 100%, laranja na parte amplificada (o fundo tem a largura da trilha toda) */
+  background: linear-gradient(90deg, #fff calc(var(--m) * 100%), #ff9f0a calc(var(--m) * 100%));
+  background-size: calc(100% / var(--p)) 100%; transition: width .09s ease-out; }
+.gs-mark { position: absolute; top: -5px; bottom: -5px; left: calc(var(--m) * 100%); width: 2px; margin-left: -1px; border-radius: 1px; background: rgba(255, 255, 255, .45); }
+.gs-thumb { position: absolute; top: 50%; left: calc(var(--p) * 100%); width: 22px; height: 22px; margin-left: -11px; border-radius: 50%;
+  transform: translateY(-50%) scale(1);
+  background: radial-gradient(circle at 35% 28%, rgba(255, 255, 255, .98), rgba(255, 255, 255, .7) 60%, rgba(235, 235, 245, .6));
+  box-shadow: 0 3px 10px rgba(0, 0, 0, .35), inset 0 1px 1px #fff, inset 0 -2px 4px rgba(0, 0, 0, .12);
+  transition: left .09s ease-out, transform .32s cubic-bezier(.34, 1.56, .64, 1), background .2s, box-shadow .2s, backdrop-filter .2s; }
+/* Segurando: a bolinha cresce e vira uma lente de vidro transparente */
+.gslider.drag .gs-thumb { transform: translateY(-50%) scale(1.55);
+  background: radial-gradient(circle at 35% 25%, rgba(255, 255, 255, .55), rgba(255, 255, 255, .12) 65%);
+  -webkit-backdrop-filter: blur(2px) saturate(200%) brightness(1.15); backdrop-filter: blur(2px) saturate(200%) brightness(1.15);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .75), inset 0 1.5px 0 rgba(255, 255, 255, .9), inset 0 -3px 6px rgba(0, 0, 0, .18), 0 8px 20px rgba(0, 0, 0, .35); }
+.gslider:hover .gs-thumb { box-shadow: 0 3px 12px rgba(0, 0, 0, .4), inset 0 1px 1px #fff, inset 0 -2px 4px rgba(0, 0, 0, .12), 0 0 0 4px rgba(255, 255, 255, .08); }
+.gs-tip { position: absolute; bottom: calc(100% + 6px); left: calc(var(--p) * 100%); transform: translateX(-50%) translateY(4px) scale(.85); opacity: 0;
+  padding: 4px 9px; border-radius: 10px; font: 800 12px/1 "Inter", sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap; color: #fff;
+  background: rgba(30, 30, 32, .82); -webkit-backdrop-filter: blur(14px) saturate(180%); backdrop-filter: blur(14px) saturate(180%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .2), 0 6px 16px rgba(0, 0, 0, .35); pointer-events: none;
+  transition: opacity .18s, transform .28s cubic-bezier(.34, 1.56, .64, 1), left .09s ease-out; }
+.gslider.drag .gs-tip, .gslider:focus-visible .gs-tip { opacity: 1; transform: translateX(-50%) translateY(-6px) scale(1); }
+.gslider.boost .gs-tip { color: #ffb340; }
+.gslider.disabled { opacity: .35; pointer-events: none; }
+.gslider:focus-visible .gs-thumb { box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 70%, transparent), inset 0 1px 1px #fff; }
+
+/* Volume da pessoa: pílula de vidro no canto do cartão */
+.tile .vol { position: absolute; right: 12px; top: 12px; z-index: 3; width: auto; display: flex; align-items: center; padding: 2px 14px; border-radius: 999px;
+  background: rgba(0, 0, 0, .42); -webkit-backdrop-filter: blur(16px) saturate(170%); backdrop-filter: blur(16px) saturate(170%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .2); opacity: 0; transition: opacity .2s; }
+.tile:hover .vol, .tile .vol:focus-within, .tile .vol:has(.drag) { opacity: 1; }
+.tile .vol .gslider { width: 140px; }
+.svol .gslider { width: 150px; }
+.svol:has(.drag) { opacity: 1 !important; }
+.stage.has-focus .tile:not(.focused) .vol { display: none; }

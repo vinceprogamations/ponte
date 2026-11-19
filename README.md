@@ -51,7 +51,7 @@ Mande **qualquer arquivo** de até 500 MB: pelo **+**, arrastando para a convers
 
 ## Fale como se estivesse do lado.
 
-Cancelamento de eco e de ruído, volume separado para cada pessoa<br>
+Cancelamento de eco e de ruído, volume de cada pessoa até **500%**<br>
 e um anel verde em volta de quem está falando.
 
 </div>
@@ -65,7 +65,7 @@ e um anel verde em volta de quem está falando.
 Escolha uma tela ou só a janela do jogo, em **480p, 720p ou 1080p**, a **30 ou 60 fps**.<br>
 A Ponte manda **só o som daquele app**: a voz do Discord não volta para ninguém.<br>
 Todo mundo pode transmitir ao mesmo tempo. Clique numa tela para ampliar, ou dê dois cliques para tela cheia.<br>
-Quem assiste ajusta **o volume da transmissão** separado da voz, e os controles somem quando o mouse para.
+Quem assiste ajusta **o volume da transmissão** separado da voz, até **500%**, e os controles somem quando o mouse para.
 
 </div>
 

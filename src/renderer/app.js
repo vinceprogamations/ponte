@@ -304,7 +304,7 @@ function closeConn(id) {
   if (c) { clearTimeout(c.watchdog); try { c.pc.close(); } catch {} conns.delete(id); }
   const r = remotes.get(id);
   if (r) {
-    for (const el of r.audios.values()) { el.srcObject = null; el.remove(); }
+    for (const el of r.audios.values()) dropAudio(el);
     remotes.delete(id);
   }
   detachMeter(id);
@@ -401,11 +401,11 @@ function onRemoteTrack(id, track, stream) {
   if (r.audios.has(stream.id)) return;
   const el = new Audio();
   el.autoplay = true;
+  el.muted = true; // o Chromium só entrega áudio remoto ao WebAudio com um elemento tocando
   el.srcObject = stream;
-  const sink = prefs.read('outDevice', '');
-  if (sink && el.setSinkId) el.setSinkId(sink).catch(() => {});
   el.play().catch(() => {});
   document.body.append(el);
+  attachAmp(el, stream);
   r.audios.set(stream.id, el);
   applyVolumes();
   // Áudio que vem junto com vídeo é som da tela; o resto é microfone.
@@ -413,11 +413,53 @@ function onRemoteTrack(id, track, stream) {
   if (!isScreenAudio) attachMeter(id, stream);
   stream.onremovetrack = () => {
     if (!stream.getTracks().some((t) => t.readyState === 'live')) {
-      el.srcObject = null;
-      el.remove();
+      dropAudio(el);
       r.audios.delete(stream.id);
     }
   };
+}
+
+// ------------------------------------------------------------------ amplificador
+// O volume de um <audio> para em 100%. Aqui o som de cada pessoa passa por um
+// ganho próprio (até 500%) e depois por um limitador, que segura os picos
+// para o som ficar alto sem estourar nem distorcer.
+const MAX_VOLUME = 5;
+let playCtx = null;
+let limiter = null;
+
+function playback() {
+  if (!playCtx) {
+    playCtx = new AudioContext({ latencyHint: 'interactive' });
+    limiter = playCtx.createDynamicsCompressor();
+    limiter.threshold.value = -3;
+    limiter.knee.value = 0;
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.002;
+    limiter.release.value = 0.2;
+    limiter.connect(playCtx.destination);
+    const sink = prefs.read('outDevice', '');
+    if (sink && playCtx.setSinkId) playCtx.setSinkId(sink).catch(() => {});
+  }
+  if (playCtx.state === 'suspended') playCtx.resume().catch(() => {});
+  return playCtx;
+}
+
+function attachAmp(el, stream) {
+  const c = playback();
+  el._src = c.createMediaStreamSource(stream);
+  el._gain = c.createGain();
+  el._gain.gain.value = 0;
+  el._src.connect(el._gain).connect(limiter);
+}
+
+function dropAudio(el) {
+  try { el._src && el._src.disconnect(); el._gain && el._gain.disconnect(); } catch {}
+  el.srcObject = null;
+  el.remove();
+}
+
+function setOutputDevice(id) {
+  if (playCtx && playCtx.setSinkId) playCtx.setSinkId(id || '').catch(() => {});
 }
 
 function volumeFor(id) { return prefs.read(`vol:${id}`, 1); }
@@ -427,11 +469,11 @@ function setVolume(id, v) {
 }
 const streamVolume = (id) => prefs.read(`svol:${id}`, 1);
 const streamMuted = (id) => prefs.read(`smute:${id}`, false);
-function setStreamVolume(id, v) {
+function setStreamVolume(id, v, dragging = false) {
   prefs.write(`svol:${id}`, v);
-  if (v > 0) prefs.write(`smute:${id}`, false);
+  if (v > 0 && streamMuted(id)) { prefs.write(`smute:${id}`, false); dragging = false; }
   applyVolumes();
-  renderStage();
+  if (!dragging) renderStage();
 }
 function toggleStreamMute(id) {
   prefs.write(`smute:${id}`, !streamMuted(id));
@@ -444,8 +486,10 @@ function applyVolumes() {
   for (const [id, r] of remotes) {
     for (const el of r.audios.values()) {
       const stream = isStreamAudio(el);
-      el.volume = stream ? streamVolume(id) : volumeFor(id);
-      el.muted = local.deafened || (stream && streamMuted(id));
+      const off = local.deafened || (stream && streamMuted(id));
+      const v = off ? 0 : (stream ? streamVolume(id) : volumeFor(id));
+      // Suave: sem estalo quando o volume muda
+      if (el._gain) el._gain.gain.setTargetAtTime(Math.min(MAX_VOLUME, v), el._gain.context.currentTime, 0.03);
     }
   }
 }
@@ -1738,12 +1782,13 @@ function renderStage() {
         if (w.mine) cam.classList.add('mirror');
         el.append(cam, avatar(w.id, w.name));
         if (!w.mine) {
-          const vol = document.createElement('input');
-          vol.type = 'range'; vol.min = '0'; vol.max = '1'; vol.step = '0.05';
+          const vol = document.createElement('div');
           vol.className = 'vol';
-          vol.title = 'Volume';
-          vol.value = String(volumeFor(w.id));
-          vol.oninput = () => setVolume(w.id, Number(vol.value));
+          vol.append(glassSlider({
+            value: volumeFor(w.id), max: MAX_VOLUME, label: `Volume de ${w.name}`,
+            onInput: (v) => setVolume(w.id, v),
+          }));
+          for (const ev of ['click', 'dblclick', 'pointerdown']) vol.addEventListener(ev, (e) => e.stopPropagation());
           el.append(vol);
         }
       } else {
@@ -1784,11 +1829,13 @@ function renderStage() {
         if (!w.mine) {
           const sv = document.createElement('div');
           sv.className = 'svol';
-          sv.innerHTML = '<button type="button" class="svol-btn"></button><input type="range" min="0" max="1" step="0.05" aria-label="Volume da transmissão">';
+          sv.innerHTML = '<button type="button" class="svol-btn"></button>';
           const btn = sv.querySelector('button');
-          const range = sv.querySelector('input');
           btn.onclick = () => toggleStreamMute(w.id);
-          range.oninput = () => setStreamVolume(w.id, Number(range.value));
+          sv.append(glassSlider({
+            value: streamVolume(w.id), max: MAX_VOLUME, label: 'Volume da transmissão',
+            onInput: (v) => setStreamVolume(w.id, v, true),
+          }));
           for (const ev of ['click', 'dblclick', 'pointerdown']) sv.addEventListener(ev, (e) => e.stopPropagation());
           el.append(sv);
         }
@@ -1832,10 +1879,9 @@ function renderStage() {
         btn.innerHTML = muted || !hasAudio ? ICON.speakerOff : ICON.speaker;
         btn.title = !hasAudio ? 'Esta transmissão não tem som' : (muted ? 'Ativar som da transmissão' : 'Silenciar transmissão');
         btn.disabled = !hasAudio;
-        const range = sv.querySelector('input');
-        range.disabled = !hasAudio;
-        if (document.activeElement !== range) range.value = String(streamMuted(w.id) ? 0 : streamVolume(w.id));
-        range.title = `Volume da transmissão: ${Math.round(Number(range.value) * 100)}%`;
+        const slider = sv.querySelector('.gslider');
+        slider.classList.toggle('disabled', !hasAudio);
+        slider._set(streamMuted(w.id) ? 0 : streamVolume(w.id));
       }
       video.hidden = !w.stream;
       el.classList.toggle('focused', focusedTile === w.key);
@@ -2140,7 +2186,7 @@ async function saveSettings() {
   applyPtt();
   const out = $('#set-out').value;
   prefs.write('outDevice', out);
-  for (const r of remotes.values()) for (const el of r.audios.values()) if (el.setSinkId) el.setSinkId(out).catch(() => {});
+  setOutputDevice(out);
   const mic = $('#set-mic').value;
   const ai = $('#set-ai').checked;
   const micChanged = mic !== prefs.read('micDevice', '');
@@ -2490,12 +2536,35 @@ function autotest() {
       const sharer = voicePeers().find((p) => p.state.sharing && remoteScreen(p.id)?.getAudioTracks().length);
       if (sharer) {
         checkedVolume = true;
-        setStreamVolume(sharer.id, 0.3);
-        const els = [...remotes.get(sharer.id).audios.values()];
-        log(`autoteste: volumes stream=${els.filter(isStreamAudio).map((e) => e.volume).join(',')} voz=${els.filter((e) => !isStreamAudio(e)).map((e) => e.volume).join(',')} svol=${document.querySelectorAll('.svol').length}`);
-        toggleStreamMute(sharer.id);
-        log(`autoteste: mudo stream=${els.filter(isStreamAudio).map((e) => e.muted).join(',')} voz=${els.filter((e) => !isStreamAudio(e)).map((e) => e.muted).join(',')}`);
-        setTimeout(() => log(`autoteste: controles escondidos=${$('#view-voice').classList.contains('idle')} opacidade=${getComputedStyle($('#controls')).opacity}`), 4000);
+        // Mede a saída real (depois do amplificador e do limitador) em 100%, 400% e mudo
+        (async () => {
+          const an = playCtx.createAnalyser();
+          an.fftSize = 2048;
+          limiter.connect(an);
+          const buf = new Float32Array(2048);
+          const measure = async (ms) => {
+            let peak = 0;
+            const stop = Date.now() + ms;
+            while (Date.now() < stop) {
+              an.getFloatTimeDomainData(buf);
+              let sum = 0;
+              for (const x of buf) sum += x * x;
+              peak = Math.max(peak, Math.sqrt(sum / buf.length));
+              await new Promise((r) => setTimeout(r, 50));
+            }
+            return peak;
+          };
+          setStreamVolume(sharer.id, 1);
+          await new Promise((r) => setTimeout(r, 400));
+          const a = await measure(1500);
+          setStreamVolume(sharer.id, 4);
+          await new Promise((r) => setTimeout(r, 400));
+          const b = await measure(1500);
+          toggleStreamMute(sharer.id);
+          await new Promise((r) => setTimeout(r, 400));
+          const c = await measure(1000);
+          log(`autoteste: saida 100%=${a.toFixed(4)} 400%=${b.toFixed(4)} mudo=${c.toFixed(4)} ganho=${(b / a).toFixed(2)}x sliders=${document.querySelectorAll('.gslider').length}`);
+        })();
       }
     }
     if (!glassLogged) { glassLogged = true; log(`vidro: ${document.querySelectorAll('.liquid-on').length} painéis com refração; filtro=${getComputedStyle($('#composer')).backdropFilter}`); }
