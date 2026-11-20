@@ -193,3 +193,13 @@ body.ptt-down #me-avatar { box-shadow: 0 0 0 2.5px var(--bg), 0 0 0 5px var(--gr
 .svol .gslider { width: 150px; }
 .svol:has(.drag) { opacity: 1 !important; }
 .stage.has-focus .tile:not(.focused) .vol { display: none; }
+/* Private enrollment stays inside the existing settings sheet. */
+.private-settings { border: 1px solid var(--line, #ffffff25); border-radius: 16px; padding: 16px; margin: 0 0 20px; min-inline-size: 0; }
+.private-settings legend { padding-inline: 6px; font-weight: 600; }
+.private-settings p, .private-settings small { font-size: 0.82rem; line-height: 1.5; }
+.private-settings .row-input { flex-wrap: wrap; margin-block: 12px; }
+.private-settings textarea { inline-size: 100%; resize: vertical; min-block-size: 76px; font: inherit; color: inherit; background: #ffffff09; border: 1px solid #ffffff30; border-radius: 10px; padding: 10px; box-sizing: border-box; }
+.private-settings button { min-block-size: 40px; }
+.private-fingerprint { overflow-wrap: anywhere; white-space: pre-line; font-family: monospace; }
+#private-error { color: #ff9e9e; }
+.private-settings :focus-visible { outline: 2px solid #82b8ff; outline-offset: 3px; }

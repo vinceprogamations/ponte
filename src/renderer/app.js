@@ -9,7 +9,7 @@ let peers = [];
 let view = 'chat';
 
 let logLines = [];
-const local = { voice: false, room: '', muted: false, deafened: false, sharing: false, quality: '', cam: false, camId: '', screenId: '' };
+const local = { voice: false, room: '', callSession: '', muted: false, deafened: false, sharing: false, quality: '', cam: false, camId: '', screenId: '' };
 let micStream = null;
 let screenStream = null;
 let screenQuality = null;
@@ -243,6 +243,7 @@ function remoteCam(id) {
 function syncConnections() {
   for (const p of peers) {
     const both = local.voice && roomOf(p.state) === local.room;
+    if (both && conns.has(p.id) && conns.get(p.id).remoteSession !== p.state.callSession) closeConn(p.id);
     if (both && !conns.has(p.id)) openConn(p.id);
     if (!both && conns.has(p.id)) closeConn(p.id);
   }
@@ -251,7 +252,7 @@ function syncConnections() {
 
 function openConn(id) {
   const pc = new RTCPeerConnection({ iceServers: [], bundlePolicy: 'max-bundle' });
-  const c = { pc, polite: me.id > id, makingOffer: false, ignoreOffer: false, queue: Promise.resolve(), screenSenders: [], camSenders: [] };
+  const c = { pc, remoteSession: peerState(id).callSession, polite: me.id > id, makingOffer: false, ignoreOffer: false, queue: Promise.resolve(), screenSenders: [], camSenders: [] };
   conns.set(id, c);
   const name = () => (peerById(id) || {}).name || id.slice(0, 6);
 
@@ -312,7 +313,8 @@ function closeConn(id) {
   renderStage();
 }
 
-function onSignal({ from, data }) {
+function onSignal({ from, data, room, session, toSession }) {
+  if (room !== local.room || toSession !== local.callSession || session !== peerState(from).callSession) return;
   const p = peerById(from);
   if (!local.voice || !p || roomOf(p.state) !== local.room) return;
   const c = conns.get(from) || openConn(from);
@@ -533,6 +535,7 @@ function onPtt(down) {
 const roomName = (id) => (channels.find((c) => c.id === id) || {}).name || 'Sala de voz';
 
 async function joinVoice(roomId = 'sala') {
+  if (!channels.some(c => c.id === roomId && c.kind === 'voice')) { toast('Você não tem acesso a essa call.'); return; }
   if (local.voice && local.room === roomId) { setView('voice'); return; }
   if (local.voice) leaveVoice({ quiet: true });
   let raw;
@@ -550,6 +553,7 @@ async function joinVoice(roomId = 'sala') {
   attachMeter(me.id, micStream);
   local.voice = true;
   local.room = roomId;
+  local.callSession = crypto.randomUUID();
   applyMute();
   pushState();
   sound('join');
@@ -564,6 +568,7 @@ function leaveVoice({ quiet = false } = {}) {
   stopCam(false);
   local.voice = false;
   local.room = '';
+  local.callSession = '';
   pushState();
   for (const id of [...conns.keys()]) closeConn(id);
   Mic.stop();
@@ -1434,9 +1439,9 @@ function fillMedia(box) {
 
 function onMediaReady({ id }) {
   const f = fileMeta.get(id);
+  for (const m of allMessages) if (m.file && m.file.id === id) m.file.local = true;
   if (!f) return;
   f.local = true;
-  for (const m of allMessages) if (m.file && m.file.id === id) m.file.local = true;
   keepBottom(() => document.querySelectorAll(`.msg-media[data-file-id="${id}"]`).forEach(fillMedia));
 }
 
@@ -1522,8 +1527,11 @@ function renderHistory() {
   lastMsg = null;
   const list = allMessages.filter((m) => m.channel === currentText);
   if (!list.length) {
-    box.innerHTML = '<div class="empty-chat"><h2></h2><p>Tudo que for escrito aqui vai direto para os computadores da rede, sem passar por servidor nenhum.</p></div>';
+    box.innerHTML = '<div class="empty-chat"><h2></h2><p></p></div>';
     box.querySelector('h2').textContent = `Bem-vindo a #${textName(currentText)}`;
+    box.querySelector('p').textContent = currentText === 'privado'
+      ? 'Só os dois dispositivos autorizados recebem estas mensagens e arquivos. A conexão é criptografada.'
+      : 'Todos que entrarem na rede com esta versão recebem o histórico deste chat geral.';
   }
   for (const m of list) appendMessage(m);
   box.scrollTop = box.scrollHeight;
@@ -2307,6 +2315,20 @@ function bind() {
   api.onChatUpdate(updateMessage);
   api.onTyping(onTyping);
   api.onChannels(onChannels);
+  api.onPrivacy(({ status, channels: list, history }) => {
+    if (!me) return;
+    me.privacy = status;
+    allMessages.length = 0;
+    msgById.clear();
+    for (const m of history) storeMessage(m);
+    onChannels(list);
+    renderHistory();
+    window.PrivateSettings?.update(status);
+  });
+  api.onPrivateCallEnded(() => {
+    if (local.voice) leaveVoice();
+    toast('A call privada foi encerrada porque a conexão autorizada terminou.');
+  });
   api.onSignal(onSignal);
   api.onLog((line) => log(line));
   api.onTrayCmd(onTrayCmd);
@@ -2606,6 +2628,7 @@ function autotest() {
   bind();
   const init = await api.init();
   me = init.me;
+  window.PrivateSettings?.init(api, me.privacy);
   if (me.update) update = me.update;
   me.autotestShare = me.autotestShare || /compartilha/i.test(me.name);
   peers = init.peers;

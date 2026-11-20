@@ -34,6 +34,9 @@ jobs:
             exit 1
           fi
 
+      - name: Testar privacidade e rede
+        run: npm test
+
       - name: Gerar instalador
         run: npm run dist
 

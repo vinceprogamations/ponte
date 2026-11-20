@@ -1,0 +1,71 @@
+'use strict';
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { LanNode } = require('../src/main/lan');
+const { PrivateLink } = require('../src/main/private-link');
+const { ScopedChatStore } = require('../src/main/scoped-chat');
+const { PrivacyNetwork } = require('../src/main/privacy-network');
+const vault = { available: () => true, seal: s => Buffer.from(s).toString('base64'), open: s => Buffer.from(s, 'base64').toString() };
+const wait = ms => new Promise(r => setTimeout(r, ms));
+async function until(fn) { for (let i = 0; i < 180; i++) { if (fn()) return; await wait(50); } throw new Error('timeout'); }
+test('three actual nodes isolate private chat, files, call state and SDP while public calls work', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ponte-routing-'));
+  const networks = [];
+  t.after(() => { for (const n of networks) { n.stop(); n.chat.close(); } fs.rmSync(dir, { recursive: true, force: true }); });
+  for (const [index, id] of ['aaaa', 'bbbb', 'cccc'].entries()) {
+    const profile = path.join(dir, id);
+    const chat = new ScopedChatStore(profile);
+    const lan = new LanNode({ id, name: id, discoveryPort: 49820, tcpPort: 49821 + index });
+    const secure = new PrivateLink({ dir: path.join(profile, 'secure'), id, name: id, vault, port: 0 });
+    networks.push(new PrivacyNetwork({ lan, secure, chat }));
+  }
+  const [a,b,c] = networks;
+  await Promise.all(networks.map(n => n.start()));
+  await until(() => networks.every(n => n.listPeers().length === 2));
+  const received = { a: [], b: [], c: [] };
+  for (const [i, n] of networks.entries()) n.on('message', (from, msg, priv) => received[['a','b','c'][i]].push({ from, msg, priv }));
+  const code = a.secure.createInvite('127.0.0.1');
+  await b.secure.acceptInvite(code);
+  await until(() => a.secure.status().pending.length === 1);
+  await a.secure.approve(b.secure.pin);
+  await until(() => b.secure.listPeers().length === 1);
+  a.broadcast({ t: 'chat', msg: { id: 'pvt-1', text: 'secret', channel: 'privado' } });
+  await until(() => received.b.some(x => x.msg.t === 'chat'));
+  await wait(100);
+  assert.equal(received.c.length, 0);
+  a.setState({ voice: true, room: 'voz-privada', callSession: 'a-private', sharing: true, screenId: 'secret-screen', cam: true, camId: 'secret-cam' });
+  b.setState({ voice: true, room: 'voz-privada', callSession: 'b-private' });
+  await until(() => a.listPeers().find(p => p.id === 'bbbb').state.callSession === 'b-private');
+  await until(() => b.listPeers().find(p => p.id === 'aaaa').state.screenId === 'secret-screen');
+  await wait(100);
+  assert.deepEqual(c.listPeers().find(p => p.id === 'aaaa').state, {});
+  assert.deepEqual(a.lan.state, {});
+  assert.deepEqual(c.lan.listPeers().find(p => p.id === 'aaaa').state, {});
+  assert.equal(a.sendTo('cccc', { t: 'signal', data: { description: { sdp: 'private-SDP' } } }), false);
+  assert.equal(a.sendTo('bbbb', { t: 'signal', data: { description: { sdp: 'private-SDP' } } }), true);
+  await until(() => received.b.some(x => x.msg.t === 'signal'));
+  assert.equal(received.c.some(x => x.msg.t === 'signal'), false);
+  // Legacy packets and public messages claiming a private channel never reach main.
+  c.lan.sendTo('aaaa', { t: 'history', msgs: [{ text: 'legacy' }] });
+  c.lan.sendTo('aaaa', { t: 'ponte-public-v2', data: { t: 'chat', msg: { id: 'pub-forged', channel: 'privado', text: 'intrusion' } } });
+  const privateFile = '11111111-1111-4111-8111-111111111111';
+  a.chat.registerFile(privateFile, true);
+  c.lan.sendTo('aaaa', { t: 'ponte-public-v2', data: { t: 'file-get', id: privateFile } });
+  await wait(150);
+  assert.equal(received.a.some(x => x.msg.t === 'history' || x.msg.t === 'file-get' || x.msg.msg?.text === 'intrusion'), false);
+  // Delayed private call packet is ignored after a room transition.
+  a.setState({ voice: true, room: 'sala', callSession: 'a-public', sharing: false, cam: false, screenId: '', camId: '' });
+  b.secure.sendTo('aaaa', { t: 'signal', room: 'voz-privada', session: 'b-private', toSession: 'a-private', data: { candidate: 'late' } });
+  c.setState({ voice: true, room: 'sala', callSession: 'c-public' });
+  await until(() => a.listPeers().find(p => p.id === 'cccc').state.callSession === 'c-public');
+  assert.equal(a.sendTo('cccc', { t: 'signal', data: { candidate: 'public-ICE' } }), true);
+  await until(() => received.c.some(x => x.msg.t === 'signal'));
+  assert.equal(received.a.some(x => x.msg.data?.candidate === 'late'), false);
+  a.broadcast({ t: 'chat', msg: { id: 'pub-1', text: 'public', channel: 'geral' } });
+  await until(() => received.c.some(x => x.msg.msg?.text === 'public'));
+  a.secure.revoke();
+  await until(() => !b.secure.listPeers().length);
+});

@@ -175,6 +175,28 @@
           <input id="set-name" maxlength="40" autofocus />
         </label>
 
+        <fieldset class="private-settings" aria-describedby="private-help">
+          <legend>Conversa privada</legend>
+          <p id="private-help">Um chat e uma call para dois dispositivos autorizados. O histórico anterior fica reservado e nunca vai para o chat geral.</p>
+          <p id="private-status" role="status" aria-live="polite">Consultando proteção…</p>
+          <p id="private-identity" class="private-fingerprint"></p>
+          <div class="row-input">
+            <button type="button" class="pill-btn" id="private-create">Criar convite privado</button>
+            <button type="button" class="pill-btn" id="private-revoke" hidden>Revogar acesso</button>
+          </div>
+          <label class="field" for="private-code">
+            <span>Convite privado</span>
+            <textarea id="private-code" name="private-code" rows="3" maxlength="2500" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" aria-describedby="private-code-help"></textarea>
+          </label>
+          <small id="private-code-help">Envie o convite por uma conversa já privada. No outro computador, cole aqui e aceite. Depois, o criador confirma o dispositivo. O convite vale por 15 minutos.</small>
+          <div class="row-input">
+            <button type="button" class="pill-btn" id="private-copy">Copiar convite</button>
+            <button type="button" class="pill-btn" id="private-accept">Aceitar convite</button>
+          </div>
+          <div id="private-pending"></div>
+          <p id="private-error" role="alert"></p>
+        </fieldset>
+
         <div class="field">
           <span>Seus endereços</span>
           <ul class="ip-list" id="set-ips"></ul>
@@ -348,6 +370,7 @@
   <script src="demo.js"></script>
   <script src="audio.js"></script>
   <script src="extras.js"></script>
+  <script src="privacy.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

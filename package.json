@@ -1,7 +1,7 @@
 {
   "name": "ponte",
   "productName": "Ponte",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Chat, voz e compartilhamento de tela direto pela LAN / Radmin VPN, sem servidor.",
   "author": "vinceprogamations",
   "license": "MIT",
@@ -14,7 +14,8 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "test": "node test/lan.test.js",
+    "test": "node --test test/privacy.test.js test/private-link.test.js test/privacy-network.test.js test/history-sync.test.js && node test/lan.test.js",
+    "test:electron": "node test/electron-privacy.cjs",
     "icon": "electron scripts/make-icon.js",
     "dist": "npm run native && electron-builder --win nsis --publish never",
     "native": "node scripts/build-native.js"
@@ -68,6 +69,7 @@
     "electron-builder": "26.0.12"
   },
   "dependencies": {
-    "electron-updater": "^6.8.11"
+    "electron-updater": "^6.8.11",
+    "selfsigned": "5.5.0"
   }
 }

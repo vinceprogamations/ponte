@@ -48,6 +48,7 @@ function cleanMessage(m) {
     v: Number(m.v) || 0,
   };
   if (file) clean.file = file;
+  if (typeof m.legacyChannel === 'string') clean.legacyChannel = m.legacyChannel.slice(0, 40);
   if (deleted) clean.deleted = true;
   if (Number(m.edited)) clean.edited = Number(m.edited);
   if (m.replyTo && typeof m.replyTo.id === 'string') {
@@ -71,14 +72,16 @@ function cleanChannel(c) {
 }
 
 class ChatStore {
-  constructor(dir) {
+  constructor(dir, { defaults = DEFAULT_CHANNELS, maxHistory = MAX_HISTORY } = {}) {
+    fs.mkdirSync(dir, { recursive: true });
+    this.maxHistory = maxHistory;
     this.historyFile = path.join(dir, 'history.json');
     this.channelsFile = path.join(dir, 'channels.json');
     const saved = readJson(this.historyFile, []);
     this.messages = (Array.isArray(saved) ? saved : []).map(cleanMessage).filter(Boolean);
     this.byId = new Map(this.messages.map((m) => [m.id, m]));
     const ch = readJson(this.channelsFile, []);
-    this.channels = new Map(DEFAULT_CHANNELS.map((c) => [c.id, { ...c }]));
+    this.channels = new Map(defaults.map((c) => [c.id, { ...c }]));
     for (const c of (Array.isArray(ch) ? ch : []).map(cleanChannel).filter(Boolean)) {
       if (!this.channels.get(c.id)?.fixed) this.channels.set(c.id, c);
     }
@@ -89,7 +92,7 @@ class ChatStore {
     clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       try {
-        fs.writeFileSync(this.historyFile, JSON.stringify(this.messages.slice(-MAX_HISTORY)));
+        fs.writeFileSync(this.historyFile, JSON.stringify(this.messages.slice(-this.maxHistory)));
         fs.writeFileSync(this.channelsFile, JSON.stringify([...this.channels.values()].filter((c) => !c.fixed)));
       } catch (err) {
         console.error('Falha ao salvar o chat:', err.message);
@@ -125,8 +128,8 @@ class ChatStore {
     }
     if (fresh.length) {
       this.messages.sort((a, b) => a.ts - b.ts);
-      if (this.messages.length > MAX_HISTORY) {
-        for (const old of this.messages.splice(0, this.messages.length - MAX_HISTORY)) this.byId.delete(old.id);
+      if (this.messages.length > this.maxHistory) {
+        for (const old of this.messages.splice(0, this.messages.length - this.maxHistory)) this.byId.delete(old.id);
       }
     }
     if (fresh.length || updated.length) this.saveSoon();
@@ -174,6 +177,12 @@ class ChatStore {
   }
 
   allChannels() { return [...this.channels.values()].filter((c) => !c.fixed); }
+
+  close() {
+    clearTimeout(this.timer);
+    fs.writeFileSync(this.historyFile, JSON.stringify(this.messages.slice(-this.maxHistory)));
+    fs.writeFileSync(this.channelsFile, JSON.stringify(this.allChannels()));
+  }
 
   /** Junta canais de outro computador. Devolve true se algo mudou. */
   mergeChannels(list) {

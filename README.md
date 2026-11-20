@@ -38,8 +38,8 @@ Sem servidor, sem conta, sem configurar nada.
 
 ## Converse.
 
-O canal **#geral** guarda o histórico nos computadores de vocês.<br>
-Quem chega depois recebe o que perdeu assim que entra.<br>
+O canal **#geral** guarda um histórico público novo nos computadores de vocês.<br>
+Quem chega depois recebe apenas o histórico público. O histórico das versões antigas fica reservado para o espaço privado.<br>
 Crie **canais** à vontade, responda, reaja, edite, apague e marque com **@nome**.<br>
 Mande **qualquer arquivo** de até 500 MB: pelo **+**, arrastando para a conversa ou com Ctrl+V.
 
@@ -132,6 +132,27 @@ A janela se adapta a qualquer tamanho, do canto da tela ao monitor inteiro.
 > Seu amigo faz a mesma coisa. Com os dois na **mesma rede do Radmin VPN** (ou no mesmo Wi-Fi), um aparece
 > na lista **Online** do outro automaticamente. Nada de digitar IP.
 
+## Chat e call privados para duas pessoas
+
+Atualize os computadores para esta versão. Em **Ajustes → Conversa privada**, no computador que vai criar o espaço:
+
+1. Clique em **Criar convite privado**. O histórico anterior aparece em **Privado 🔒**, separado do chat geral. Nenhuma cópia antiga é apagada.
+2. Envie o convite apenas ao seu amigo, por uma conversa que já seja privada. Ele vale por 15 minutos. Fechar os ajustes limpa o convite exibido; você pode gerar outro se precisar.
+3. No outro computador, cole o convite nos ajustes e clique em **Aceitar convite**.
+4. No computador criador, confira o nome, o endereço e a identidade exibida com seu amigo e clique em **Autorizar este dispositivo**. O segundo dispositivo mostra sua própria identidade nos ajustes para comparação.
+
+Só os dois dispositivos autorizados recebem **Privado 🔒**, **Call privada 🔒**, mensagens, arquivos e presença nessa call. Confira o endereço do seu amigo junto com a identidade do dispositivo. O IP ajuda a localizar a pessoa; não concede acesso sozinho. Não cole o convite no chat geral.
+
+As conversas e arquivos privados usam uma conexão TLS 1.3 com certificados vinculados ao pareamento. As chaves ficam protegidas pelo armazenamento seguro do sistema. Copiar nome ou identificador não permite entrar. O armazenamento seguro precisa estar disponível para ativar o espaço privado.
+
+**Call geral** continua disponível para todos, inclusive para os dois membros privados quando quiserem participar. Cada pessoa entra em uma call por vez. Voz, cancelamento de ruído, câmera, captura de tela, resoluções, taxas de quadros e bitrate continuam com as configurações existentes; a mídia permanece ponto a ponto pelo WebRTC.
+
+O criador pode **Revogar acesso** nos ajustes. Isso encerra a conexão, as transferências e a call privadas e invalida o convite. Para trocar o segundo computador, faça um novo pareamento. A identidade é persistente; se ela for perdida em uma reinstalação, será preciso parear novamente.
+
+O histórico anterior fica arquivado localmente em `legacy-private-archive.json`, antes de iniciar a rede. Em instalações que não ativaram o espaço privado, ele permanece reservado, sem sincronização pública. As mensagens de todos os canais antigos são reunidas no chat privado dos autorizados; o arquivo original é preservado sem o limite de 2.000 mensagens da conversa pública.
+
+**Cópias que outras pessoas já receberam não podem ser recolhidas.** Clientes antigos continuam com o comportamento antigo entre si; atualize todas as instalações para interromper a retransmissão dessas cópias. Esta versão ignora pacotes antigos de histórico e nunca envia seus dados privados a um cliente antigo. Para conversar na call geral ou no chat geral novo, os participantes precisam usar a versão atualizada.
+
 ## Perguntas frequentes
 
 <details>
@@ -204,6 +225,7 @@ flowchart LR
   `26.255.255.255` do Radmin, e por unicast para os IPs que ela já conhece.
 - **Canal de controle:** uma conexão TCP por amigo leva o chat, o estado (na voz, mudo, transmitindo) e a
   negociação do WebRTC.
+- **Canal privado:** conexão TLS 1.3 separada na porta 47841 (ou nas seguintes se ocupada), com certificados pareados. Histórico, arquivos, estado da call e negociação privados nunca passam pelo canal público.
 - **Mídia:** WebRTC ponto a ponto **sem STUN nem TURN**, usando só os IPs locais e da VPN. Se a conexão não
   sobe em cerca de 10 s, ela é refeita sozinha.
 - **Som por app:** o [`native/ponte-audio.cpp`](native/ponte-audio.cpp) usa a captura de áudio por processo
@@ -224,6 +246,7 @@ Requer Node.js 22 ou mais novo. Para o som por app, também o compilador C++ do 
 npm install
 npm start          # abre o app
 npm test           # sobe dois nós locais e testa descoberta, mensagens e reconexão
+npm run test:electron # três perfis isolados: privacidade, áudio e tela em 1080p60 no Electron real
 npm run dist       # gera dist/Ponte-Instalar.exe e dist/latest.yml
 ```
 </details>

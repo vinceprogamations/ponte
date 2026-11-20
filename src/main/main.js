@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, session, desktopCapturer, shell, Notification, protocol } = require('electron');
+const { app, BrowserWindow, ipcMain, session, desktopCapturer, shell, Notification, protocol, safeStorage } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -7,7 +7,10 @@ const crypto = require('node:crypto');
 const { spawn, execFile } = require('node:child_process');
 const { LanNode, localInterfaces } = require('./lan');
 const { MediaStore, isViewable } = require('./media');
-const { ChatStore } = require('./chat');
+const { ScopedChatStore } = require('./scoped-chat');
+const { PrivateLink } = require('./private-link');
+const { PrivacyNetwork } = require('./privacy-network');
+const { historyBatches, requestMissingHistory } = require('./history-sync');
 const { createHotkeys } = require('./hotkeys');
 const { createPresence } = require('./presence');
 const { createOverlay } = require('./overlay');
@@ -128,16 +131,39 @@ function me() {
     autotest: AUTOTEST,
     platform: process.platform,
     version: app.getVersion(),
+    privacy: node?.secure.status(),
     update: updater.status(),
   };
 }
 
 async function startNetwork() {
-  node = new LanNode({
+  const lan = new LanNode({
     id: config.id,
     name: config.name,
     manualHosts: config.manualHosts,
     discoveryPort: Number(process.env.PONTE_DISCOVERY_PORT) || undefined,
+  });
+  const secure = new PrivateLink({
+    dir: userFile('private-identity-v2'), id: config.id, name: config.name,
+    vault: {
+      available: () => safeStorage.isEncryptionAvailable() && (!safeStorage.getSelectedStorageBackend || safeStorage.getSelectedStorageBackend() !== 'basic_text'),
+      seal: text => safeStorage.encryptString(text).toString('base64'),
+      open: text => safeStorage.decryptString(Buffer.from(text, 'base64')),
+    },
+  });
+  node = new PrivacyNetwork({ lan, secure, chat });
+  node.on('privacy-status', status => {
+    send('privacy', { status, channels: chat.listChannels(), history: chat.messages.map(decorate) });
+  });
+  node.on('private-call-ended', () => {
+    voiceState.voice = false;
+    voiceState.sharing = false;
+    send('private-call-ended');
+    if (tray) tray.refresh();
+  });
+  node.on('private-disconnected', () => {
+    if (media) for (const inc of [...media.incoming.values()]) if (chat.canAccessFile(inc.meta.id, true) || !chat.canAccessFile(inc.meta.id, false)) media._abort(inc.meta.id);
+    if (media) for (const id of media.requested.keys()) if (!chat.canAccessFile(id, false)) media.requested.delete(id);
   });
   node.on('log', (line) => {
     console.log(`[rede] ${line}`);
@@ -147,10 +173,11 @@ async function startNetwork() {
     send('peers', node.listPeers());
     if (tray) tray.refresh();
   });
-  node.on('connected', (peerId) => {
-    // Sincroniza histórico e canais com quem acabou de chegar.
-    node.sendTo(peerId, { t: 'history', msgs: chat.recent(300) });
-    node.sendTo(peerId, { t: 'channels', list: chat.allChannels() });
+  node.on('connected', (peerId, privateTransport) => {
+    // Private history never goes through a public socket, including reconnections.
+    const history = privateTransport ? chat.private.messages : chat.recent(300, false);
+    if (!privateTransport) node.sendTo(peerId, { t: 'channels', list: chat.allChannels() }, false);
+    for (const msgs of historyBatches(history)) node.sendTo(peerId, { t: 'history', msgs }, privateTransport);
   });
   // Ping de cada amigo (pela conexão da Ponte), mandado à interface a cada 2 s.
   const rtts = {};
@@ -165,32 +192,29 @@ async function startNetwork() {
   media.on('log', (line) => console.log(`[arquivos] ${line}`));
   node.on('peers', () => media.dropFrom(new Set(node.listPeers().map((p) => p.id))));
   // Anexos que ainda não temos são pedidos para quem mandou a mensagem.
-  const fetchMissing = (peerId, msgs) => {
-    for (const m of msgs) if (m.file && !media.has(m.file.id)) media.request(peerId, m.file.id);
-  };
-  node.on('message', (peerId, msg) => {
+  node.on('message', (peerId, msg, privateTransport) => {
     if (media.handle(peerId, msg)) return;
     if (msg.t === 'chat' && msg.msg) {
-      const { fresh } = chat.merge([{ ...msg.msg, from: peerId, v: 0, reactions: undefined, deleted: false }]);
-      fetchMissing(peerId, fresh);
+      const { fresh } = chat.merge([{ ...msg.msg, from: peerId, v: 0, reactions: undefined, deleted: false }], privateTransport);
+      requestMissingHistory(peerId, [msg.msg], privateTransport, chat, media);
       for (const m of fresh) {
         send('chat', decorate(m));
         notifyMessage(m);
       }
     } else if (msg.t === 'history' && Array.isArray(msg.msgs)) {
-      const { fresh, updated } = chat.merge(msg.msgs.slice(-300));
-      fetchMissing(peerId, fresh);
+      const { fresh, updated } = chat.merge(msg.msgs.slice(-100), privateTransport);
+      requestMissingHistory(peerId, msg.msgs, privateTransport, chat, media);
       for (const m of fresh) send('chat', decorate(m));
       for (const m of updated) send('chat:update', decorate(m));
     } else if (msg.t === 'chat-op') {
-      const m = chat.apply(msg, peerId);
+      const m = chat.apply(msg, peerId, privateTransport);
       if (m) send('chat:update', decorate(m));
     } else if (msg.t === 'channels') {
       if (chat.mergeChannels(msg.list)) send('channels', chat.listChannels());
     } else if (msg.t === 'typing') {
       send('typing', { from: peerId, channel: String(msg.channel || 'geral').slice(0, 40) });
     } else if (msg.t === 'signal') {
-      send('signal', { from: peerId, data: msg.data });
+      send('signal', { from: peerId, data: msg.data, room: msg.room, session: msg.session, toSession: msg.toSession });
     }
   });
   await node.start();
@@ -309,9 +333,23 @@ function setupIpc() {
     playing: presence ? presence.playing() : '',
   }));
 
+  ipcMain.handle('privacy:status', () => node.secure.status());
+  ipcMain.handle('privacy:invite', () => {
+    const host = localInterfaces().find(i => i.radmin)?.address || localInterfaces()[0]?.address;
+    if (!host) throw new Error('Nenhum endereço de rede disponível.');
+    return node.secure.createInvite(host);
+  });
+  ipcMain.handle('privacy:accept', (_e, code) => node.secure.acceptInvite(code));
+  ipcMain.handle('privacy:approve', (_e, pin) => node.secure.approve(pin));
+  ipcMain.handle('privacy:revoke', () => node.secure.revoke());
+
+  const requireTextChannel = channel => {
+    if (!chat.listChannels().some(c => c.id === channel && c.kind === 'text')) throw new Error('Você não tem acesso a esse chat.');
+  };
+
   const cleanReply = (r) => (r && typeof r.id === 'string' ? { id: r.id, name: String(r.name || ''), text: String(r.text || '') } : undefined);
   const newMessage = (req, extra = {}) => ({
-    id: crypto.randomUUID(),
+    id: `${chat.isPrivateChannel(req?.channel) ? 'pvt-' : 'pub-'}${crypto.randomUUID()}`,
     from: config.id,
     name: config.name,
     text: String((req && req.text) || '').trim().slice(0, 4000),
@@ -322,6 +360,12 @@ function setupIpc() {
     ...extra,
   });
   const publish = (msg) => {
+    requireTextChannel(msg.channel);
+    if (msg.replyTo) {
+      const original = chat.get(msg.replyTo.id);
+      if (!original || original.channel !== msg.channel) delete msg.replyTo;
+      else msg.replyTo = { id: original.id, name: original.name, text: preview(original).slice(0, 140) };
+    }
     const { fresh } = chat.merge([msg]);
     const m = fresh[0];
     if (m) node.broadcast({ t: 'chat', msg: m });
@@ -329,12 +373,14 @@ function setupIpc() {
   };
 
   ipcMain.handle('media:send', async (_e, req) => {
+    requireTextChannel(String(req?.channel || 'geral'));
     const meta = await media.import({
       srcPath: req && typeof req.path === 'string' && req.path ? req.path : null,
       bytes: req && req.bytes ? req.bytes : null,
       name: req && req.name,
       mime: req && req.mime,
     });
+    chat.registerFile(meta.id, chat.isPrivateChannel(req?.channel));
     return publish(newMessage(req, { file: meta })); // quem recebe pede o arquivo (file-get)
   });
 
@@ -369,6 +415,7 @@ function setupIpc() {
 
   // Abrir/mostrar um arquivo recebido (cópia em Downloads\Ponte, marcada como da internet)
   ipcMain.handle('media:open', async (_e, { id, reveal }) => {
+    if (!chat.canAccessFile(String(id), false) && !chat.canAccessFile(String(id), true)) throw new Error('Você não tem acesso autorizado a esse anexo.');
     const file = await media.exportTo(path.join(app.getPath('downloads'), 'Ponte'), String(id));
     if (reveal) shell.showItemInFolder(file);
     else {
@@ -449,9 +496,11 @@ function setupIpc() {
     for (const k of ['voice', 'muted', 'deafened', 'sharing']) if (k in patch) allowed[k] = !!patch[k];
     if ('quality' in patch) allowed.quality = String(patch.quality || '').replace(/[^0-9p]/g, '').slice(0, 8);
     if ('room' in patch) allowed.room = /^[a-z0-9-]{0,40}$/.test(String(patch.room || '')) ? String(patch.room || '') : '';
+    if ('callSession' in patch) allowed.callSession = /^[\w-]{0,64}$/.test(String(patch.callSession || '')) ? String(patch.callSession || '') : '';
     for (const k of ['camId', 'screenId']) if (k in patch) allowed[k] = String(patch[k] || '').replace(/[^\w{}-]/g, '').slice(0, 80);
     if ('cam' in patch) allowed.cam = !!patch.cam;
-    node.setState(allowed);
+    try { node.setState(allowed); }
+    catch (err) { send('private-call-ended'); send('log', err.message); return; }
     for (const k of Object.keys(voiceState)) if (k in allowed) voiceState[k] = allowed[k];
     if (tray) tray.refresh();
   });
@@ -585,7 +634,7 @@ app.whenReady().then(async () => {
   await updater.startup();
 
   config = loadConfig();
-  chat = new ChatStore(app.getPath('userData'));
+  chat = new ScopedChatStore(app.getPath('userData'));
   setupMedia();
   setupIpc();
   setupAppAudio();
@@ -594,7 +643,11 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.error('Falha ao iniciar a rede:', err);
   }
-  if (media) protocol.handle('ponte-media', (req) => media.respond(req));
+  if (media) protocol.handle('ponte-media', req => {
+    const id = new URL(req.url).pathname.replace(/^\//, '');
+    if (!chat.canAccessFile(id, false) && !chat.canAccessFile(id, true)) return new Response('não encontrado', { status: 404 });
+    return media.respond(req);
+  });
   createWindow();
   updater.closeSplash();
   setupTray();
@@ -710,6 +763,7 @@ app.on('will-quit', () => {
   if (presence) presence.dispose();
   if (overlay) overlay.destroy();
   if (node) node.stop();
+  if (chat) chat.close();
   updater.stop();
   if (tray) { tray.destroy(); tray = null; }
 });

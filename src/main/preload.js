@@ -9,6 +9,13 @@ const on = (channel) => (fn) => {
 
 contextBridge.exposeInMainWorld('ponte', {
   init: () => ipcRenderer.invoke('init'),
+  privacyStatus: () => ipcRenderer.invoke('privacy:status'),
+  createPrivateInvite: () => ipcRenderer.invoke('privacy:invite'),
+  acceptPrivateInvite: code => ipcRenderer.invoke('privacy:accept', code),
+  approvePrivateDevice: pin => ipcRenderer.invoke('privacy:approve', pin),
+  revokePrivateDevice: () => ipcRenderer.invoke('privacy:revoke'),
+  onPrivacy: on('privacy'),
+  onPrivateCallEnded: on('private-call-ended'),
   sendChat: (text) => ipcRenderer.invoke('chat:send', text),
   sendSignal: (to, data) => ipcRenderer.send('signal:send', { to, data }),
   setState: (patch) => ipcRenderer.send('state:set', patch),
